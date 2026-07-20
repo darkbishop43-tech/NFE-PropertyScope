@@ -122,3 +122,32 @@ create table if not exists professional_verifications (
   professional_name text null, organization text null, verification_date date null, notes text not null,
   document_asset_id uuid null references property_assets(id) on delete set null, created_at timestamptz not null default now()
 );
+
+-- Builder #2 controlled NFE-OS integration history.
+-- Real-estate cases remain owned by this application's database.
+-- These records store returned outputs only; they do not mirror or modify NFE-OS Platform case lineage.
+create table if not exists nfe_os_integration_runs (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references site_projects(id) on delete cascade,
+  real_estate_case_id text not null,
+  status text not null check (status in ('COMPLETED','PARTIAL','FAILED')),
+  adapter_version text not null,
+  is_mock boolean not null default true,
+  nfe_request_id text null,
+  hdp_request_id text null,
+  rrs_request_id text null,
+  nfe_analysis jsonb null,
+  hdp_analysis jsonb null,
+  rrs_review jsonb null,
+  overall_summary text null,
+  provider text null,
+  model text null,
+  service_version text null,
+  error_message text null,
+  started_at timestamptz not null default now(),
+  completed_at timestamptz null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_nfe_os_integration_runs_project_started
+  on nfe_os_integration_runs(project_id, started_at desc);

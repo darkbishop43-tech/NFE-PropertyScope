@@ -40,3 +40,19 @@ button { cursor: pointer; }
 @media (max-width: 760px) {
   .sidebar { display: none; }.main-content { margin-left: 0; padding-bottom: 70px; }.mobile-nav { display: grid; grid-template-columns: 1fr 1fr; position: fixed; z-index: 50; left: 12px; right: 12px; bottom: 10px; background: rgba(10,23,36,.96); border: 1px solid rgba(255,255,255,.08); border-radius: 16px; padding: 7px; backdrop-filter: blur(16px); }.mobile-nav a { color: #a8b5c0; display: grid; place-items: center; gap: 2px; padding: 6px; }.mobile-nav a.active { color: #fff; }.mobile-nav span { color: var(--accent-2); font-weight: 900; }.page-wrap { padding: 28px 18px 86px; }.page-header { display: grid; align-items: start; }.page-header h1 { font-size: 44px; }.dashboard-header .button { width: 100%; }.metric-grid { grid-template-columns: repeat(2, 1fr); gap: 9px; }.metric-card { padding: 14px; }.metric-card strong { font-size: 28px; }.property-grid, .evidence-grid, .scenario-grid, .risk-grid, .plan-grid { grid-template-columns: 1fr; }.property-thumb { height: 180px; }.section-heading { align-items: flex-start; flex-direction: column; }.start-panel, .sticky-submit, .integration-banner { flex-direction: column; align-items: stretch; }.photo-preview-grid { grid-template-columns: repeat(2, 1fr); }.property-hero, .property-hero-overlay { min-height: 440px; }.property-hero-overlay { padding: 28px 20px; }.property-hero h1 { font-size: 48px; }.workspace-commandbar { width: calc(100% - 24px); margin-top: -15px; overflow-x: auto; }.workspace-commandbar button { white-space: nowrap; }.workspace-commandbar span { display: none; }.workspace-message, .workspace-tabs, .workspace-content { width: calc(100% - 24px); }.workspace-tabs { margin-top: 18px; }.info-grid, .content-aside, .scenario-columns, .form-two-col { grid-template-columns: 1fr; }.before-after { grid-template-columns: 1fr; }.visual-arrow { transform: rotate(90deg); }.source-row { flex-direction: column; }.subtle-callout { display: none; }
 }
+
+/* Builder #2 controlled NFE / HDP / RRS integration views */
+.analysis-governance-banner { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 14px 16px; margin: 0 0 14px; border: 1px solid var(--line); border-radius: 14px; background: #f7f9fa; }
+.analysis-governance-banner strong { white-space: nowrap; font-size: 12px; letter-spacing: .08em; }
+.analysis-governance-banner span { color: var(--muted); font-size: 14px; line-height: 1.45; }
+.analysis-subtabs { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 16px; padding-bottom: 4px; }
+.analysis-subtabs button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 10px 14px; white-space: nowrap; cursor: pointer; font-weight: 800; }
+.analysis-subtabs button.active { background: #14222e; color: #fff; border-color: #14222e; }
+.analysis-error-state { margin-top: 16px; padding: 16px; border: 1px solid #e1c2c2; background: #fff7f7; border-radius: 14px; }
+.analysis-error-state strong, .analysis-error-state p, .analysis-error-state small { display: block; }
+.analysis-error-state p { margin: 7px 0; line-height: 1.5; }
+.analysis-error-state small { color: var(--muted); }
+.overall-summary-card { margin-top: 4px; }
+@media (max-width: 700px) {
+  .analysis-governance-banner { align-items: flex-start; flex-direction: column; }
+}

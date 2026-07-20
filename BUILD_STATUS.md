@@ -1,92 +1,93 @@
 # NFE Site Intelligence — Builder #2 Build Status
 
-## Repository isolation
+## Current status
 
-- Standalone repository root: `nfe-site-intelligence-builder2`
-- Independent Git history initialized locally
-- No main NFE-OS repository is present inside this project
-- `PROJECT_BOUNDARY.md` locks the separation rule
-- `npm run boundary-check` verifies the expected standalone repository identity
+Builder #2 continues as a standalone real-estate/property intelligence application.
 
-## Implemented
+The protected NFE-OS Platform remains external and untouched.
 
-### Foundation
-- Next.js App Router + TypeScript
-- Responsive desktop/mobile application shell
-- Standalone navigation and design system
-- Domain types and adapter boundaries
-- Supabase/Postgres schema foundation
-- Environment-variable placeholders
+## Isolation controls
 
-### Dashboard
-- Recent/saved property investigations
-- Demo projects
-- Project stage/status cards
-- New Site entry point
+- Standalone local Git repository
+- No Git remote configured
+- Protected NFE-OS repository explicitly blocked by boundary check
+- Protected NFE-OS local working-directory references blocked from application source
+- No Platform `app.js` import
+- No Platform DOM scraping or click automation
+- No dependency on Platform localStorage, browser archive, workspace state, prompts, validators, or lineage
+- Separate Builder #2 environment variables, storage, database schema, and future API routes
 
-### New Site workflow
-- Phone camera/file upload input
-- Client-side image compression
-- Address/location input
-- Location-description fallback
-- Simple user question with suggestions
-- Optional parcel/listing fields
-- Local save/resume for MVP
+## NFE-OS integration contract
 
-### Property Workspace
-- Overview
-- Evidence
-- Site Analysis
-- Scenarios
-- Risks
-- Visualize
-- Project Plan
+All engine-specific integration is localized to:
 
-### Evidence & provenance
-- Confidence labels
-- Verification flags
-- Provenance types
-- Mock evidence adapter
-- Explicit unknown/not-yet-retrieved states
+`lib/adapters/nfe-os.ts`
 
-### NFE-OS boundary
-- `NfeOsAdapter` interface
-- `MockNfeOsAdapter` implementation
-- No private NFE-OS architecture duplicated in UI components
+Operations remain separate:
 
-### Scenario governance
-- Multiple scenario cards
-- No automatic winner
-- Human-only scenario selection
-- Selection disclaimer
+- `runNfeAnalysis`
+- `runHdp`
+- `runRrs`
 
-### Visual / future integrations
-- Before/proposed concept workspace shell
-- Original property image kept separate
-- Visual-generation adapter placeholder
-- TrueTakeoff adapter boundary only
-- "COMING LATER" cost/material action
+Current active implementation:
 
-## Validation completed
+`MockNfeOsAdapter` — DEVELOPMENT / MOCK only
 
-- `npm run boundary-check` — PASS
-- `npm run typecheck` — PASS
-- `npm run build` — PASS
-- Runtime smoke test:
-  - `/dashboard` — HTTP 200
-  - `/sites/new` — HTTP 200
-  - `/sites/demo-urban-lot` — HTTP 200
-- `npm audit --omit=dev` — 0 reported vulnerabilities
+Future implementation:
 
-## Current MVP limitations
+`RemoteNfeOsAdapter` — configurable approved service base URL and localized paths. It is not instantiated by the current UI and has no default NFE-OS Platform URL.
 
-- No live authoritative property/zoning/flood/parcel integrations
-- No live map provider
-- No remote NFE-OS service connection
-- No real image-generation provider
-- No TrueTakeoff functionality
-- Local browser/device persistence until Supabase is connected
+## Output separation
 
-## Next recommended build step
+The Property Workspace now displays separate sections for:
 
-Connect this standalone repository to its own new remote GitHub repository and its own Vercel project, then provision a dedicated Supabase project for NFE Site Intelligence. Do not reuse the main NFE-OS repository, Vercel project, or database.
+- NFE Analysis
+- HDP Discovery
+- RRS Review
+- Overall Summary
+
+Each integration run can preserve:
+
+- real-estate case ID
+- NFE request ID
+- HDP request ID
+- RRS request ID
+- timestamps
+- adapter version
+- provider/model/service version metadata
+- mock/service flag
+- partial or failed state
+- error message
+
+## Failure isolation
+
+If a future NFE-OS service is unavailable:
+
+- the real-estate case remains saved
+- partial outputs remain preserved
+- loading ends normally
+- the user receives a clear unavailable message
+- no automatic retry occurs
+- retry remains a visible user action
+
+## Database foundation
+
+Added `nfe_os_integration_runs` to the Builder #2 Supabase schema.
+
+This table stores returned integration results in the real-estate application's database and does not modify or mirror NFE-OS Platform case lineage.
+
+## Verification
+
+- Repository boundary check: PASS
+- TypeScript check: PASS
+- Production build: PASS
+- Git diff whitespace check: PASS
+- Protected Platform source-coupling scan: PASS
+
+## Governance
+
+Human final authority remains locked.
+
+Outputs are presented as structured analysis, decision support, evidence review, risk identification, and material requiring further verification—not guaranteed truth, legal advice, financial advice, appraisal certification, underwriting approval, or investment approval.
+
+**One engine. Multiple applications. Separate repositories. Separate deployments. Controlled integration.**

@@ -87,6 +87,60 @@ export interface RiskItem {
   verificationRequired: boolean;
 }
 
+export interface NfeProviderMetadata {
+  provider?: string;
+  model?: string;
+  version?: string;
+}
+
+export interface NfeAnalysisOutput {
+  requestId: string;
+  findings: AnalysisFinding[];
+  confidence: Confidence;
+  generatedAt: string;
+  provenance: 'NFE_OS_ANALYSIS';
+  providerMetadata?: NfeProviderMetadata;
+}
+
+export interface HdpDiscoveryOutput {
+  requestId: string;
+  discoveries: string[];
+  confidence: Confidence;
+  generatedAt: string;
+  provenance: 'NFE_OS_ANALYSIS';
+  providerMetadata?: NfeProviderMetadata;
+}
+
+export interface RrsReviewOutput {
+  requestId: string;
+  verdict: string;
+  strengths: string[];
+  concerns: string[];
+  recommendations: string[];
+  generatedAt: string;
+  provenance: 'NFE_OS_ANALYSIS';
+  providerMetadata?: NfeProviderMetadata;
+}
+
+export interface NfeOsIntegrationRun {
+  id: string;
+  realEstateCaseId: string;
+  status: 'COMPLETED' | 'PARTIAL' | 'FAILED';
+  adapterVersion: string;
+  isMock: boolean;
+  startedAt: string;
+  completedAt?: string;
+  nfeRequestId?: string;
+  hdpRequestId?: string;
+  rrsRequestId?: string;
+  nfeAnalysis?: NfeAnalysisOutput;
+  hdpAnalysis?: HdpDiscoveryOutput;
+  rrsReview?: RrsReviewOutput;
+  overallSummary?: string;
+  providerMetadata?: NfeProviderMetadata;
+  errorMessage?: string;
+}
+
 export interface SiteProject {
   id: string;
   name: string;
@@ -106,6 +160,7 @@ export interface SiteProject {
   risks: RiskItem[];
   selectedScenarioId?: string;
   analysisCompleted: boolean;
+  nfeOsRuns?: NfeOsIntegrationRun[];
   createdAt: string;
   updatedAt: string;
   isDemo?: boolean;
