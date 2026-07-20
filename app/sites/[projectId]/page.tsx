@@ -33,23 +33,28 @@ export default function SiteWorkspacePage() {
   function persist(next: SiteProject) { setProject(next); if (!next.isDemo) saveProject(next); }
 
   async function refreshEvidence() {
+    if (!project) return;
+    const current = project;
     setWorking(true); setMessage('');
-    const evidence = await new MockPropertyDataAdapter().getEvidence(project.address || project.locationDescription || 'Unknown location');
-    const next = { ...project, evidence, stage: 'EVIDENCE_GATHERING' as const, status: 'Mock evidence refreshed', updatedAt: new Date().toISOString() };
+    const evidence = await new MockPropertyDataAdapter().getEvidence(current.address || current.locationDescription || 'Unknown location');
+    const next = { ...current, evidence, stage: 'EVIDENCE_GATHERING' as const, status: 'Mock evidence refreshed', updatedAt: new Date().toISOString() };
     persist(next); setWorking(false); setMessage('Mock evidence loaded. Live authoritative sources are not connected.'); setTab('Evidence');
   }
 
   async function runAnalysis() {
+    if (!project) return;
+    const current = project;
     setWorking(true); setMessage('');
-    let evidence: EvidenceItem[] = project.evidence;
-    if (evidence.length === 0) evidence = await new MockPropertyDataAdapter().getEvidence(project.address || project.locationDescription || 'Unknown location');
-    const response = await new MockNfeOsAdapter().analyzeSite({ project, evidence });
-    const scenarios: DevelopmentScenario[] = demoProjects[0].scenarios.map((s) => ({ ...s, id: `${s.id}-${project.id.slice(0, 6)}` }));
-    const next = { ...project, evidence, findings: response.findings, scenarios, analysisCompleted: true, stage: 'SCENARIO_REVIEW' as const, status: 'Preliminary analysis ready', updatedAt: new Date().toISOString() };
+    let evidence: EvidenceItem[] = current.evidence;
+    if (evidence.length === 0) evidence = await new MockPropertyDataAdapter().getEvidence(current.address || current.locationDescription || 'Unknown location');
+    const response = await new MockNfeOsAdapter().analyzeSite({ project: current, evidence });
+    const scenarios: DevelopmentScenario[] = demoProjects[0].scenarios.map((s) => ({ ...s, id: `${s.id}-${current.id.slice(0, 6)}` }));
+    const next = { ...current, evidence, findings: response.findings, scenarios, analysisCompleted: true, stage: 'SCENARIO_REVIEW' as const, status: 'Preliminary analysis ready', updatedAt: new Date().toISOString() };
     persist(next); setWorking(false); setMessage(`Analysis completed through ${response.adapterVersion}. This is a mock structured response, not authoritative property advice.`); setTab('Site Analysis');
   }
 
   function selectScenario(id: string) {
+    if (!project) return;
     const next = { ...project, selectedScenarioId: id, stage: 'SCENARIO_SELECTED' as const, status: 'Scenario selected by human', updatedAt: new Date().toISOString() };
     persist(next); setMessage('Scenario selected by human. Selection is not a regulatory, legal, financial, or feasibility approval.');
   }
