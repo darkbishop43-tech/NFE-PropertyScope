@@ -3,7 +3,7 @@ import './globals.css';
 import AppShell from '@/components/app-shell';
 
 export const metadata: Metadata = {
-  title: 'NFE Site Intelligence',
+  title: 'PropertyScope',
   description: 'Human-governed property and development intelligence workspace.'
 };
 

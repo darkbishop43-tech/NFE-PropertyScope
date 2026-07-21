@@ -1,6 +1,6 @@
-# NFE Site Intelligence — Builder #2
+# PropertyScope — Builder #2
 
-Standalone property-development intelligence MVP. This repository is intentionally isolated from the protected NFE-OS Platform.
+Property intelligence and development-scenario MVP. This repository is intentionally isolated from the protected NFE-OS Platform.
 
 ## Current build
 

@@ -15,8 +15,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
     <div className="app-shell">
       <aside className="sidebar">
         <Link href="/dashboard" className="brand">
-          <span className="brand-mark">N</span>
-          <span><strong>NFE</strong><small>Site Intelligence</small></span>
+          <span className="brand-mark">P</span>
+          <span><strong>PropertyScope</strong><small>Property Intelligence</small></span>
         </Link>
         <nav className="sidebar-nav">
           {nav.map((item) => <Link key={item.href} href={item.href} className={pathname.startsWith(item.href) ? 'nav-link active' : 'nav-link'}><span>{item.icon}</span>{item.label}</Link>)}
