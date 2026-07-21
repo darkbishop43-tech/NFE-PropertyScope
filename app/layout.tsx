@@ -3,8 +3,8 @@ import './globals.css';
 import AppShell from '@/components/app-shell';
 
 export const metadata: Metadata = {
-  title: 'NFE Site Intelligence',
-  description: 'Human-governed property and development intelligence workspace.'
+  title: 'NFE PropertyScope',
+  description: 'Real Estate Development Intelligence with human-governed evidence review and decision support.'
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

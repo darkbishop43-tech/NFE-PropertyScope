@@ -1,69 +1,49 @@
-# NFE Site Intelligence — Builder #2
+# NFE PropertyScope — Builder #2
 
-Standalone property-development intelligence MVP. This repository is intentionally isolated from the protected NFE-OS Platform.
+**Version:** 1.2.0  
+**Build:** `PS-P1.2-EVIDENCE-WORKSPACE-20260721`
 
-## Current build
+Standalone real-estate development intelligence application. This repository is intentionally isolated from the protected NFE-OS Platform.
 
-- Independent Next.js App Router project
-- Responsive premium dashboard
-- New Site field workflow with phone camera/file input
-- Local MVP save/resume using Builder #2's own browser localStorage namespace
-- Client-side image compression for local photo persistence
-- Property Workspace with Overview, Evidence, Site Analysis, Scenarios, Risks, Visualize, and Project Plan
-- Mock property evidence adapter
-- Strict NFE-OS integration adapter with separate `runNfeAnalysis`, `runHdp`, and `runRrs` operations
-- Separate NFE Analysis, HDP Discovery, RRS Review, and Overall Summary views
-- Per-run request IDs, timestamps, provenance, adapter metadata, and mock/service status
-- Failure isolation that preserves the real-estate case and requires manual retry
-- Mock visual-generation adapter boundary
-- TrueTakeoff future boundary only
-- Supabase/Postgres schema foundation
-- Visible provenance, confidence, and verification language
-- Human scenario selection only
+## Phase 1.2 capabilities
 
-## Repository boundary
+- Approved dashboard and photo-first intake preserved
+- Public brand completed as **NFE PropertyScope**
+- Friendly **New Investigation** workflow
+- Mixed property evidence intake for JPG, JPEG, PNG, WEBP, PDF, DOCX, TXT, and CSV
+- Desktop drag/drop, file picker, phone photo selection, and phone document selection
+- Maximum 12 files per investigation and 20 MB per file
+- File name, type, size, source category, verification state, truth class, and upload state
+- Duplicate, unsupported-type, oversized-file, removal, and retry handling
+- Investigation workspace with nine visible stages
+- Separate NFE Analysis, HDP Discovery, RRS Review, Overall Summary, and Human Decision
+- Explicit NFE-OS connection truth state
+- Human-confirmed NFE request review; uploads never trigger analysis
+- Local investigation metadata restoration after refresh/browser restart
+- Secure private Supabase storage routes prepared behind a controlled-beta allowlist
+- Server-side MIME, extension, size, content-signature, ownership, count, and rate-limit checks
+- Private bucket/signed-access migration included
 
-Read:
+## Current release gate
 
-- `PROJECT_BOUNDARY.md`
-- `docs/NFE_OS_INTEGRATION_BOUNDARY.md`
+The public build remains safe when private storage is not configured:
 
-Run:
+`INTAKE UI COMPLETE — SECURE STORAGE REQUIRED BEFORE PUBLIC FILE UPLOAD`
 
-```bash
-npm run boundary-check
-```
+In that state, selected file contents are previews only and are not persisted in localStorage. Investigation metadata, evidence metadata, failed states, provenance, and verification states can still be preserved in the browser.
 
-Builder #2 must never modify or push to `darkbishop43-tech/NFE1.0-sandbox` and must never use the protected NFE-OS working tree.
+Permanent uploads must not be enabled until the dedicated Supabase project, private bucket migration, server credentials, and controlled-beta tester map have been configured and tested.
 
-## Local development
+## Local verification
 
 ```bash
 npm install
-npm run boundary-check
+npm run verify
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+## Protected boundary
 
-## NFE-OS development integration
+PropertyScope must not import, edit, scrape, automate, or depend on the protected NFE-OS Platform UI, `app.js`, DOM, localStorage, IndexedDB, case archive, prompts, validators, Arena implementation, or lineage.
 
-The current MVP uses `MockNfeOsAdapter` and makes no external NFE-OS calls.
-
-No NFE-OS call occurs automatically on page load. A user must explicitly choose **Run NFE-OS Analysis**.
-
-Future approved service endpoints remain localized behind `lib/adapters/nfe-os.ts`.
-
-## MVP limitations
-
-- Public property records are not live-connected.
-- Zoning is never presented as authoritative.
-- Map provider is not connected.
-- NFE/HDP/RRS outputs are DEVELOPMENT / MOCK until an approved external service contract exists.
-- Image generation is a placeholder.
-- TrueTakeoff is not implemented.
-- Local projects are browser/device-local until Supabase persistence is connected.
-
-## Next engineering step
-
-Connect Supabase as Builder #2's persistence layer without changing the protected NFE-OS Platform, then implement an approved external NFE-OS service adapter when Builder #1 publishes a stable contract.
+**One engine. Multiple applications. Separate repositories. Separate deployments. Controlled integration.**

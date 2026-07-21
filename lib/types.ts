@@ -18,14 +18,70 @@ export type ProvenanceType =
   | 'NFE_OS_ANALYSIS'
   | 'PROFESSIONALLY_VERIFIED';
 
+export type EvidenceSourceCategory =
+  | 'User photo'
+  | 'User document'
+  | 'Listing material'
+  | 'Government record'
+  | 'Survey or parcel material'
+  | 'Business/project plan'
+  | 'County or municipal correspondence'
+  | 'Third-party report'
+  | 'Conceptual material'
+  | 'Unclassified evidence';
+
+export type VerificationState =
+  | 'Unreviewed'
+  | 'Needs verification'
+  | 'Partially verified'
+  | 'Verified against source'
+  | 'Conflicting source'
+  | 'Superseded';
+
+export type EvidenceTruthClass =
+  | 'FACT'
+  | 'USER-PROVIDED CLAIM'
+  | 'LISTING CLAIM'
+  | 'PUBLIC-RECORD EVIDENCE'
+  | 'ASSUMPTION'
+  | 'AI-GENERATED ANALYSIS'
+  | 'CONCEPTUAL PROJECTION'
+  | 'HUMAN DECISION';
+
+export type EvidenceUploadStatus =
+  | 'READY'
+  | 'LOCAL_PREVIEW_ONLY'
+  | 'QUEUED'
+  | 'UPLOADING'
+  | 'SAVED_PRIVATE'
+  | 'FAILED'
+  | 'REJECTED'
+  | 'SECURE_STORAGE_REQUIRED';
+
+export type AdapterConnectionState = 'LIVE' | 'MOCK' | 'DISCONNECTED' | 'FAILED';
+
 export interface PropertyAsset {
   id: string;
+  evidenceItemId?: string;
   type: 'PHOTO' | 'DOCUMENT' | 'GENERATED_VISUAL';
+  /** Demo imagery only. User-uploaded file contents must never be persisted in localStorage. */
   dataUrl?: string;
   filename: string;
+  originalFilename?: string;
+  sanitizedFilename?: string;
   mimeType: string;
+  sizeBytes?: number;
+  uploadedAt?: string;
   isPrimary: boolean;
   provenance: ProvenanceType;
+  sourceCategory?: EvidenceSourceCategory;
+  sourceDescription?: string;
+  truthClass?: EvidenceTruthClass;
+  verificationStatus?: VerificationState;
+  uploadStatus?: EvidenceUploadStatus;
+  storageObjectRef?: string;
+  errorMessage?: string;
+  localPreviewAvailable?: boolean;
 }
 
 export interface EvidenceItem {
@@ -40,7 +96,9 @@ export interface EvidenceItem {
   retrievedAt?: string;
   confidence: Confidence;
   verificationRequired: boolean;
+  verificationStatus?: VerificationState;
   provenance: ProvenanceType;
+  truthClass?: EvidenceTruthClass;
   notes?: string;
 }
 
@@ -125,8 +183,9 @@ export interface RrsReviewOutput {
 export interface NfeOsIntegrationRun {
   id: string;
   realEstateCaseId: string;
-  status: 'COMPLETED' | 'PARTIAL' | 'FAILED';
+  status: 'PENDING' | 'COMPLETED' | 'PARTIAL' | 'FAILED';
   adapterVersion: string;
+  connectionState?: AdapterConnectionState;
   isMock: boolean;
   startedAt: string;
   completedAt?: string;
@@ -141,9 +200,19 @@ export interface NfeOsIntegrationRun {
   errorMessage?: string;
 }
 
+export interface AnalysisConnectionStatus {
+  nfe: AdapterConnectionState;
+  hdp: AdapterConnectionState;
+  rrs: AdapterConnectionState;
+  adapterVersion: string;
+  label: string;
+}
+
 export interface SiteProject {
   id: string;
+  ownerId?: string;
   name: string;
+  investigationType?: 'Known Property' | 'Observed Property' | 'Listing Review' | 'Other';
   address: string;
   locationDescription?: string;
   parcelId?: string;
@@ -155,6 +224,8 @@ export interface SiteProject {
   status: string;
   assets: PropertyAsset[];
   evidence: EvidenceItem[];
+  missingInformation?: string[];
+  analysisConnection?: AnalysisConnectionStatus;
   findings: AnalysisFinding[];
   scenarios: DevelopmentScenario[];
   risks: RiskItem[];
@@ -164,4 +235,16 @@ export interface SiteProject {
   createdAt: string;
   updatedAt: string;
   isDemo?: boolean;
+}
+
+export interface PublicSystemStatus {
+  version: string;
+  buildId: string;
+  storageMode: 'SUPABASE_PRIVATE' | 'LOCAL_PREVIEW_ONLY';
+  secureUploadsEnabled: boolean;
+  controlledBetaGate: boolean;
+  nfe: AdapterConnectionState;
+  hdp: AdapterConnectionState;
+  rrs: AdapterConnectionState;
+  adapterVersion: string;
 }

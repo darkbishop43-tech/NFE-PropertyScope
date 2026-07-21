@@ -1,28 +1,57 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { demoProjects } from '@/lib/demo-data';
-import { loadProject, saveProject } from '@/lib/storage';
-import type {
-  AnalysisFinding,
-  DevelopmentScenario,
-  EvidenceItem,
-  NfeOsIntegrationRun,
-  SiteProject
-} from '@/lib/types';
+import { useParams } from 'next/navigation';
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ConfidenceBadge, ProvenanceBadge, StatusBadge } from '@/components/status-badge';
-import { MockPropertyDataAdapter } from '@/lib/adapters/property-data';
 import {
+  ACTIVE_NFE_ADAPTER_VERSION,
   buildRealEstateNfePayload,
+  getConfiguredNfeConnectionState,
+  getNfeConnectionLabel,
   MockNfeOsAdapter,
   summarizeIntegrationRun
 } from '@/lib/adapters/nfe-os';
+import { demoProjects } from '@/lib/demo-data';
+import {
+  ACCEPT_ATTRIBUTE,
+  defaultEvidenceCategory,
+  defaultTruthClass,
+  formatBytes,
+  isAllowedEvidenceFile,
+  MAX_EVIDENCE_FILES,
+  MAX_EVIDENCE_FILE_SIZE_BYTES,
+  MAX_EVIDENCE_FILE_SIZE_LABEL,
+  sanitizeFilename
+} from '@/lib/evidence-config';
+import { createPrivateProjectRecord, getPublicSystemStatus, uploadPrivateEvidence } from '@/lib/client/propertyscope-api';
+import { loadProject, saveProject } from '@/lib/storage';
+import { PROPERTY_SCOPE_BUILD_ID, PROPERTY_SCOPE_VERSION } from '@/lib/version';
+import type {
+  AdapterConnectionState,
+  AnalysisFinding,
+  DevelopmentScenario,
+  HdpDiscoveryOutput,
+  NfeAnalysisOutput,
+  NfeOsIntegrationRun,
+  PropertyAsset,
+  PublicSystemStatus,
+  RrsReviewOutput,
+  SiteProject
+} from '@/lib/types';
 
-const tabs = ['Overview', 'Evidence', 'Site Analysis', 'Scenarios', 'Risks', 'Visualize', 'Project Plan'];
-const analysisTabs = ['NFE Analysis', 'HDP Discovery', 'RRS Review', 'Overall Summary'] as const;
-type AnalysisTab = (typeof analysisTabs)[number];
+const stages = [
+  'Property Intake',
+  'Evidence Collection',
+  'NFE Analysis',
+  'HDP Discovery',
+  'RRS Review',
+  'Development Scenarios',
+  'Visual Concepts',
+  'Overall Summary',
+  'Human Decision'
+] as const;
+type WorkspaceStage = (typeof stages)[number];
 
 const findingLabels: Record<AnalysisFinding['category'], string> = {
   MATTERS_MOST: 'What Appears to Matter Most',
@@ -36,18 +65,57 @@ const findingLabels: Record<AnalysisFinding['category'], string> = {
   CONCLUSION_CHANGER: 'What Could Change the Conclusion'
 };
 
-export default function SiteWorkspacePage() {
+const defaultMissingInformation = [
+  'Official parcel number or parcel numbers',
+  'Official ownership record',
+  'Official zoning jurisdiction and permitted uses',
+  'Floodplain, wetlands, creek buffers, and setbacks',
+  'Buildable acreage and soil suitability',
+  'Road-access approval and emergency access',
+  'Water, sewer, electric, broadband, and drainage capacity',
+  'Environmental restrictions, title restrictions, easements, and survey accuracy',
+  'Traffic conditions and development approval process'
+];
+
+export default function PropertyWorkspacePage() {
   const params = useParams<{ projectId: string }>();
   const [project, setProject] = useState<SiteProject | null>(null);
-  const [tab, setTab] = useState('Overview');
+  const [stage, setStage] = useState<WorkspaceStage>('Property Intake');
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState('');
+  const [showNfeReview, setShowNfeReview] = useState(false);
+  const [systemStatus, setSystemStatus] = useState<PublicSystemStatus | null>(null);
+  const [betaCode, setBetaCode] = useState('');
+  const workspaceFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const demo = demoProjects.find((p) => p.id === params.projectId);
-    setProject(demo ?? loadProject(params.projectId) ?? null);
+    getPublicSystemStatus().then(setSystemStatus).catch(() => setSystemStatus(null));
+  }, []);
+
+  useEffect(() => {
+    const demo = demoProjects.find((item) => item.id === params.projectId);
+    const loaded = demo ?? loadProject(params.projectId) ?? null;
+    if (loaded) {
+      const connectionState = getConfiguredNfeConnectionState();
+      setProject({
+        ...loaded,
+        missingInformation: loaded.missingInformation?.length
+          ? loaded.missingInformation
+          : defaultMissingInformation,
+        analysisConnection: loaded.analysisConnection ?? {
+          nfe: connectionState,
+          hdp: connectionState,
+          rrs: connectionState,
+          adapterVersion: ACTIVE_NFE_ADAPTER_VERSION,
+          label: getNfeConnectionLabel(connectionState)
+        }
+      });
+    } else {
+      setProject(null);
+    }
   }, [params.projectId]);
 
+  const latestRun = project?.nfeOsRuns?.[0];
   const selectedScenario = useMemo(
     () => project?.scenarios.find((scenario) => scenario.id === project.selectedScenarioId),
     [project]
@@ -57,8 +125,8 @@ export default function SiteWorkspacePage() {
     return (
       <div className="page-wrap">
         <div className="empty-state">
-          <h1>Project not found</h1>
-          <p>The project may exist in another browser or device. Local MVP projects are device-local.</p>
+          <h1>Investigation not found</h1>
+          <p>This investigation may belong to another browser or tester. PropertyScope does not expose another tester&apos;s evidence.</p>
           <Link href="/dashboard" className="button button-primary">Back to Dashboard</Link>
         </div>
       </div>
@@ -70,123 +138,206 @@ export default function SiteWorkspacePage() {
     if (!next.isDemo) saveProject(next);
   }
 
-  async function refreshEvidence() {
-    if (!project) return;
-    const current = project;
-    setWorking(true);
-    setMessage('');
-    try {
-      const evidence = await new MockPropertyDataAdapter().getEvidence(
-        current.address || current.locationDescription || 'Unknown location'
-      );
-      persist({
-        ...current,
-        evidence,
-        stage: 'EVIDENCE_GATHERING',
-        status: 'Mock evidence refreshed',
-        updatedAt: new Date().toISOString()
-      });
-      setMessage('DEVELOPMENT / MOCK evidence loaded. Live authoritative sources are not connected.');
-      setTab('Evidence');
-    } catch {
-      setMessage('Property evidence is temporarily unavailable. The real-estate case has been preserved. Retry only when you choose.');
-    } finally {
-      setWorking(false);
-    }
+  function connectionState(): AdapterConnectionState {
+    return project?.analysisConnection?.nfe ?? getConfiguredNfeConnectionState();
   }
 
-  async function runAnalysis() {
-    if (!project) return;
+  async function runNfeAnalysis() {
+    if (!project || working) return;
+    const state = connectionState();
+    if (state === 'DISCONNECTED' || state === 'FAILED') {
+      setMessage(`${getNfeConnectionLabel(state)}. The investigation and evidence remain preserved.`);
+      return;
+    }
+
     const current = project;
     const adapter = new MockNfeOsAdapter();
-    const startedAt = new Date().toISOString();
     const runId = crypto.randomUUID();
-    let evidence: EvidenceItem[] = current.evidence;
-    let partialRun: NfeOsIntegrationRun = {
+    const startedAt = new Date().toISOString();
+    const pending: NfeOsIntegrationRun = {
       id: runId,
       realEstateCaseId: current.id,
-      status: 'FAILED',
+      status: 'PENDING',
+      connectionState: state,
       adapterVersion: adapter.adapterVersion,
       isMock: adapter.isMock,
       startedAt
     };
 
+    setShowNfeReview(false);
     setWorking(true);
     setMessage('');
+    persist({
+      ...current,
+      nfeOsRuns: [pending, ...(current.nfeOsRuns ?? [])],
+      status: 'NFE analysis requested by human',
+      updatedAt: new Date().toISOString()
+    });
 
     try {
-      if (evidence.length === 0) {
-        evidence = await new MockPropertyDataAdapter().getEvidence(
-          current.address || current.locationDescription || 'Unknown location'
-        );
-      }
-
-      const payload = buildRealEstateNfePayload(current, evidence);
+      const payload = buildRealEstateNfePayload(current, current.evidence);
       const nfeAnalysis = await adapter.runNfeAnalysis(payload);
-      partialRun = {
-        ...partialRun,
+      const scenarios: DevelopmentScenario[] = demoProjects[0].scenarios.map((scenario) => ({
+        ...scenario,
+        id: `${scenario.id}-${current.id.slice(0, 8)}`
+      }));
+      const completed: NfeOsIntegrationRun = {
+        ...pending,
         status: 'PARTIAL',
         nfeRequestId: nfeAnalysis.requestId,
         nfeAnalysis,
-        providerMetadata: nfeAnalysis.providerMetadata
+        providerMetadata: nfeAnalysis.providerMetadata,
+        completedAt: new Date().toISOString()
       };
-
-      const hdpAnalysis = await adapter.runHdp({ payload, nfeAnalysis });
-      partialRun = {
-        ...partialRun,
-        hdpRequestId: hdpAnalysis.requestId,
-        hdpAnalysis
-      };
-
-      const rrsReview = await adapter.runRrs({ payload, nfeAnalysis, hdpAnalysis });
-      const completedRun: NfeOsIntegrationRun = {
-        ...partialRun,
-        status: 'COMPLETED',
-        rrsRequestId: rrsReview.requestId,
-        rrsReview,
-        completedAt: new Date().toISOString(),
-        overallSummary: summarizeIntegrationRun({ nfeAnalysis, hdpAnalysis, rrsReview })
-      };
-
-      const scenarios: DevelopmentScenario[] = demoProjects[0].scenarios.map((scenario) => ({
-        ...scenario,
-        id: `${scenario.id}-${current.id.slice(0, 6)}`
-      }));
-
       persist({
         ...current,
-        evidence,
         findings: nfeAnalysis.findings,
-        scenarios,
+        scenarios: current.scenarios.length ? current.scenarios : scenarios,
         analysisCompleted: true,
-        nfeOsRuns: [completedRun, ...(current.nfeOsRuns ?? [])],
-        stage: 'SCENARIO_REVIEW',
-        status: 'Preliminary NFE / HDP / RRS analysis ready',
+        nfeOsRuns: [completed, ...(current.nfeOsRuns ?? [])],
+        stage: 'ANALYZED',
+        status: adapter.isMock ? 'NFE mock analysis ready — test output only' : 'NFE analysis ready',
         updatedAt: new Date().toISOString()
       });
-      setMessage(`DEVELOPMENT / MOCK NFE, HDP, and RRS completed through ${adapter.adapterVersion}. Outputs are separated and stored with provenance.`);
-      setTab('Site Analysis');
+      setMessage(`${getNfeConnectionLabel(state)}. NFE output was requested by the human and remains separate from HDP and RRS.`);
+      setStage('NFE Analysis');
     } catch (error) {
-      const errorMessage = error instanceof Error
-        ? error.message
-        : 'NFE-OS analysis is temporarily unavailable. Property data has been preserved.';
-      const failedRun: NfeOsIntegrationRun = {
-        ...partialRun,
-        status: partialRun.nfeAnalysis || partialRun.hdpAnalysis ? 'PARTIAL' : 'FAILED',
-        completedAt: new Date().toISOString(),
-        errorMessage
-      };
+      const errorMessage = error instanceof Error ? error.message : 'NFE-OS analysis is unavailable.';
       persist({
         ...current,
-        evidence,
-        findings: partialRun.nfeAnalysis?.findings ?? current.findings,
-        analysisCompleted: Boolean(partialRun.nfeAnalysis) || current.analysisCompleted,
-        nfeOsRuns: [failedRun, ...(current.nfeOsRuns ?? [])],
-        status: 'NFE-OS analysis unavailable — property data preserved',
+        nfeOsRuns: [{ ...pending, status: 'FAILED', errorMessage, completedAt: new Date().toISOString() }, ...(current.nfeOsRuns ?? [])],
+        status: 'NFE-OS unavailable — property data preserved',
         updatedAt: new Date().toISOString()
       });
       setMessage(`${errorMessage} No automatic retry was started.`);
-      setTab('Site Analysis');
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function runHdp() {
+    if (!project || working || !latestRun?.nfeAnalysis) return;
+    const current = project;
+    const adapter = new MockNfeOsAdapter();
+    setWorking(true);
+    setMessage('');
+    try {
+      const payload = buildRealEstateNfePayload(current, current.evidence);
+      const hdpAnalysis = await adapter.runHdp({ payload, nfeAnalysis: latestRun.nfeAnalysis });
+      const nextRun: NfeOsIntegrationRun = {
+        ...latestRun,
+        status: 'PARTIAL',
+        hdpRequestId: hdpAnalysis.requestId,
+        hdpAnalysis,
+        completedAt: new Date().toISOString()
+      };
+      persist({ ...current, nfeOsRuns: [nextRun, ...(current.nfeOsRuns ?? []).slice(1)], status: 'HDP mock discovery ready — test output only', updatedAt: new Date().toISOString() });
+      setMessage('HDP Discovery completed as DEVELOPMENT / MOCK and remains visibly separate from NFE Analysis.');
+      setStage('HDP Discovery');
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : 'HDP is unavailable.'} The investigation remains preserved.`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function runRrs() {
+    if (!project || working || !latestRun?.nfeAnalysis || !latestRun.hdpAnalysis) return;
+    const current = project;
+    const adapter = new MockNfeOsAdapter();
+    setWorking(true);
+    setMessage('');
+    try {
+      const payload = buildRealEstateNfePayload(current, current.evidence);
+      const rrsReview = await adapter.runRrs({ payload, nfeAnalysis: latestRun.nfeAnalysis, hdpAnalysis: latestRun.hdpAnalysis });
+      const nextRun: NfeOsIntegrationRun = {
+        ...latestRun,
+        status: 'COMPLETED',
+        rrsRequestId: rrsReview.requestId,
+        rrsReview,
+        overallSummary: summarizeIntegrationRun({ nfeAnalysis: latestRun.nfeAnalysis, hdpAnalysis: latestRun.hdpAnalysis, rrsReview }),
+        completedAt: new Date().toISOString()
+      };
+      persist({ ...current, nfeOsRuns: [nextRun, ...(current.nfeOsRuns ?? []).slice(1)], status: 'RRS mock review ready — test output only', updatedAt: new Date().toISOString() });
+      setMessage('RRS Review completed as DEVELOPMENT / MOCK. Final authority remains human.');
+      setStage('RRS Review');
+    } catch (error) {
+      setMessage(`${error instanceof Error ? error.message : 'RRS is unavailable.'} The investigation remains preserved.`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function addOrRetryEvidence(event: ChangeEvent<HTMLInputElement>) {
+    if (!project) return;
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    if (!files.length) return;
+    setWorking(true);
+    setMessage('');
+    let next = project;
+
+    try {
+      if (systemStatus?.secureUploadsEnabled && betaCode.trim()) {
+        await createPrivateProjectRecord(next, betaCode.trim());
+      }
+
+      for (const file of files) {
+        if (next.assets.length >= MAX_EVIDENCE_FILES && !next.assets.some((asset) => asset.originalFilename === file.name && ['FAILED', 'REJECTED', 'SECURE_STORAGE_REQUIRED'].includes(asset.uploadStatus || ''))) {
+          setMessage(`Maximum ${MAX_EVIDENCE_FILES} evidence files per investigation.`);
+          break;
+        }
+        const prior = next.assets.find((asset) => asset.originalFilename === file.name && ['FAILED', 'REJECTED', 'SECURE_STORAGE_REQUIRED'].includes(asset.uploadStatus || ''));
+        const sourceCategory = prior?.sourceCategory || defaultEvidenceCategory(file);
+        const baseAsset: PropertyAsset = {
+          id: prior?.id || crypto.randomUUID(),
+          evidenceItemId: prior?.evidenceItemId || prior?.id || crypto.randomUUID(),
+          type: file.type.startsWith('image/') ? 'PHOTO' : 'DOCUMENT',
+          filename: file.name,
+          originalFilename: file.name,
+          sanitizedFilename: sanitizeFilename(file.name),
+          mimeType: file.type || 'application/octet-stream',
+          sizeBytes: file.size,
+          uploadedAt: new Date().toISOString(),
+          isPrimary: prior?.isPrimary || false,
+          provenance: 'USER_PROVIDED',
+          sourceCategory,
+          sourceDescription: prior?.sourceDescription || '',
+          truthClass: prior?.truthClass || defaultTruthClass(sourceCategory),
+          verificationStatus: prior?.verificationStatus || 'Unreviewed',
+          uploadStatus: 'QUEUED',
+          localPreviewAvailable: false
+        };
+        baseAsset.evidenceItemId = baseAsset.id;
+
+        let finalAsset: PropertyAsset;
+        if (!isAllowedEvidenceFile(file)) {
+          finalAsset = { ...baseAsset, uploadStatus: 'REJECTED', errorMessage: 'Unsupported file type. Accepted: JPG, JPEG, PNG, WEBP, PDF, DOCX, TXT and CSV.' };
+        } else if (file.size > MAX_EVIDENCE_FILE_SIZE_BYTES) {
+          finalAsset = { ...baseAsset, uploadStatus: 'REJECTED', errorMessage: `Oversized file. Maximum size is ${MAX_EVIDENCE_FILE_SIZE_LABEL}.` };
+        } else if (systemStatus?.secureUploadsEnabled && betaCode.trim()) {
+          try {
+            finalAsset = await uploadPrivateEvidence(next.id, baseAsset, file, betaCode.trim());
+          } catch (error) {
+            finalAsset = { ...baseAsset, uploadStatus: 'FAILED', errorMessage: error instanceof Error ? error.message : 'Upload failed. Reselect the file to retry.' };
+          }
+        } else {
+          finalAsset = { ...baseAsset, uploadStatus: 'SECURE_STORAGE_REQUIRED', errorMessage: 'Local preview only — this file has not been securely saved.' };
+        }
+
+        const hadPrior = next.assets.some((asset) => asset.id === finalAsset.id);
+        next = {
+          ...next,
+          assets: hadPrior ? next.assets.map((asset) => asset.id === finalAsset.id ? finalAsset : asset) : [...next.assets, finalAsset],
+          stage: 'EVIDENCE_GATHERING',
+          status: finalAsset.uploadStatus === 'SAVED_PRIVATE' ? 'Private evidence saved' : 'Evidence metadata preserved',
+          updatedAt: new Date().toISOString()
+        };
+        persist(next);
+      }
+      setMessage(systemStatus?.secureUploadsEnabled && betaCode.trim()
+        ? 'Evidence processing completed. Failed items remain visible and can be retried by reselecting the file.'
+        : 'Evidence metadata preserved. Secure private storage must be configured before file contents can persist.');
     } finally {
       setWorking(false);
     }
@@ -201,10 +352,12 @@ export default function SiteWorkspacePage() {
       status: 'Scenario selected by human',
       updatedAt: new Date().toISOString()
     });
-    setMessage('Scenario selected by human. Selection is not a regulatory, legal, financial, appraisal, underwriting, investment, or feasibility approval.');
+    setMessage('Scenario selected by human. This is not an approval, appraisal, legal conclusion, or feasibility certification.');
+    setStage('Human Decision');
   }
 
   const hero = project.assets.find((asset) => asset.isPrimary && asset.dataUrl)?.dataUrl;
+  const state = project.analysisConnection?.nfe ?? getConfiguredNfeConnectionState();
 
   return (
     <div className="workspace-page">
@@ -218,219 +371,302 @@ export default function SiteWorkspacePage() {
             <span className="stage-pill light">{project.stage.replaceAll('_', ' ')}</span>
           </div>
           <div>
-            <span className="eyebrow light-text">Property Workspace</span>
+            <span className="eyebrow light-text">Property Investigation Workspace</span>
             <h1>{project.name}</h1>
             <p>{project.address || project.locationDescription || 'Location not yet confirmed'}</p>
           </div>
           <div className="hero-question">
-            <small>Primary question</small>
+            <small>Main question</small>
             <strong>{project.primaryQuestion}</strong>
           </div>
         </div>
       </section>
 
       <div className="workspace-commandbar">
-        <button onClick={refreshEvidence} disabled={working}>↻ Refresh Evidence</button>
-        <button onClick={runAnalysis} disabled={working}>✦ Run NFE-OS Analysis</button>
-        <button onClick={() => setTab('Visualize')}>▣ Visualize</button>
+        <button onClick={() => setStage('Evidence Collection')}>＋ Add Property Evidence</button>
+        <button onClick={() => setShowNfeReview(true)} disabled={working || state === 'DISCONNECTED' || state === 'FAILED'}>✦ Run NFE Analysis</button>
+        <button onClick={() => setStage('Visual Concepts')}>▣ Visual Concepts</button>
         <span>{working ? 'Working…' : 'Human final authority'}</span>
       </div>
+
+      <ConnectionBanner state={state} adapterVersion={project.analysisConnection?.adapterVersion ?? ACTIVE_NFE_ADAPTER_VERSION} />
       {message && <div className="workspace-message">{message}</div>}
-      <div className="workspace-tabs">
-        {tabs.map((item) => (
-          <button key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>
+
+      <nav className="workspace-stage-nav" aria-label="Property investigation stages">
+        {stages.map((item, index) => (
+          <button key={item} className={stage === item ? 'active' : ''} onClick={() => setStage(item)}>
+            <span>{index + 1}</span>{item}
+          </button>
         ))}
-      </div>
+      </nav>
 
       <main className="workspace-content">
-        {tab === 'Overview' && <Overview project={project} />}
-        {tab === 'Evidence' && <EvidenceView project={project} />}
-        {tab === 'Site Analysis' && <AnalysisView project={project} onRun={runAnalysis} working={working} />}
-        {tab === 'Scenarios' && <ScenarioView project={project} onSelect={selectScenario} />}
-        {tab === 'Risks' && <RiskView project={project} />}
-        {tab === 'Visualize' && <VisualView project={project} selectedScenario={selectedScenario} />}
-        {tab === 'Project Plan' && <ProjectPlanView project={project} selectedScenario={selectedScenario} />}
+        {stage === 'Property Intake' && <PropertyIntake project={project} />}
+        {stage === 'Evidence Collection' && <EvidenceCollection project={project} systemStatus={systemStatus} betaCode={betaCode} setBetaCode={setBetaCode} inputRef={workspaceFileRef} onFiles={addOrRetryEvidence} working={working} />}
+        {stage === 'NFE Analysis' && <NfeStage project={project} run={latestRun} onReview={() => setShowNfeReview(true)} working={working} />}
+        {stage === 'HDP Discovery' && <HdpStage output={latestRun?.hdpAnalysis} canRun={Boolean(latestRun?.nfeAnalysis)} onRun={runHdp} working={working} />}
+        {stage === 'RRS Review' && <RrsStage output={latestRun?.rrsReview} canRun={Boolean(latestRun?.nfeAnalysis && latestRun?.hdpAnalysis)} onRun={runRrs} working={working} />}
+        {stage === 'Development Scenarios' && <ScenarioStage project={project} onSelect={selectScenario} />}
+        {stage === 'Visual Concepts' && <VisualConceptStage project={project} selectedScenario={selectedScenario} />}
+        {stage === 'Overall Summary' && <OverallSummary run={latestRun} project={project} />}
+        {stage === 'Human Decision' && <HumanDecision project={project} selectedScenario={selectedScenario} />}
       </main>
+
+      {showNfeReview && (
+        <AnalysisReview
+          project={project}
+          state={state}
+          onCancel={() => setShowNfeReview(false)}
+          onConfirm={runNfeAnalysis}
+          working={working}
+        />
+      )}
     </div>
   );
 }
 
-function Overview({ project }: { project: SiteProject }) {
+function ConnectionBanner({ state, adapterVersion }: { state: AdapterConnectionState; adapterVersion: string }) {
+  return (
+    <div className={`connection-banner connection-${state.toLowerCase()}`}>
+      <div>
+        <strong>{getNfeConnectionLabel(state)}</strong>
+        <span>Adapter: {adapterVersion}</span>
+      </div>
+      <small>{state === 'MOCK' ? 'Development test output only. No live NFE-OS service call is made.' : 'PropertyScope preserves the investigation if the external service is unavailable.'}</small>
+    </div>
+  );
+}
+
+function PropertyIntake({ project }: { project: SiteProject }) {
   return (
     <div className="content-grid">
-      <section className="content-main">
-        <div className="section-heading"><div><span className="eyebrow">Overview</span><h2>What we know so far</h2></div></div>
-        <div className="info-grid">
-          <Info label="Address" value={project.address || 'Unknown'} />
-          <Info label="Parcel ID" value={project.parcelId || 'Not Yet Retrieved'} />
-          <Info label="Apparent current use" value={project.apparentCurrentUse || 'Unknown'} />
-          <Info label="Intended use" value={project.intendedUse || 'Open / not specified'} />
+      <section className="panel span-2">
+        <div className="section-heading"><span className="eyebrow">Property Intake</span><h2>Known investigation information</h2></div>
+        <div className="detail-grid">
+          <Detail label="Property case ID" value={project.id} />
+          <Detail label="Investigation type" value={project.investigationType || 'Not specified'} />
+          <Detail label="Project title" value={project.name} />
+          <Detail label="Address / location" value={project.address || project.locationDescription || 'Unknown'} />
+          <Detail label="Parcel ID" value={project.parcelId || 'Unknown — needs verification'} />
+          <Detail label="Listing URL" value={project.listingUrl || 'Not provided'} />
+          <Detail label="Intended use" value={project.intendedUse || 'Open to investigation'} />
+          <Detail label="Apparent current use" value={project.apparentCurrentUse || 'Unknown'} />
         </div>
-        <div className="map-placeholder"><div><span>⌖</span><strong>Map & parcel boundary area</strong><small>Map provider not connected in this MVP.</small></div></div>
       </section>
-      <aside className="content-aside">
-        <div className="alert-card"><span className="eyebrow">Key Alert</span><h3>Low information ≠ high certainty</h3><p>Official property, zoning, environmental, engineering, legal, appraisal, underwriting, investment, and financial information must be verified through appropriate sources and professionals.</p></div>
-        <div className="timeline-card"><span className="eyebrow">Investigation Stage</span><strong>{project.stage.replaceAll('_', ' ')}</strong><p>{project.status}</p></div>
-      </aside>
+      <section className="panel span-2">
+        <span className="eyebrow">Main Question</span>
+        <h2>{project.primaryQuestion}</h2>
+        <p className="governance-note">This question begins an investigation. It is not a request for automatic approval or guaranteed feasibility.</p>
+      </section>
+      <Disclosure />
     </div>
   );
 }
 
-function EvidenceView({ project }: { project: SiteProject }) {
+function EvidenceCollection({ project, systemStatus, betaCode, setBetaCode, inputRef, onFiles, working }: {
+  project: SiteProject;
+  systemStatus: PublicSystemStatus | null;
+  betaCode: string;
+  setBetaCode: (value: string) => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onFiles: (event: ChangeEvent<HTMLInputElement>) => void;
+  working: boolean;
+}) {
   return (
-    <section>
-      <div className="section-heading"><div><span className="eyebrow">Evidence</span><h2>Sources stay visible.</h2><p>Preliminary findings never silently become verified facts.</p></div></div>
-      {project.evidence.length === 0 ? (
-        <Empty title="No evidence loaded yet" text="Use Refresh Evidence to load the MVP mock evidence structure. Live public-record integrations are not connected." />
-      ) : (
-        <div className="evidence-grid">
-          {project.evidence.map((item) => (
-            <article className="evidence-card" key={item.id}>
-              <div className="card-label-row"><span className="eyebrow">{item.category}</span><StatusBadge tone={item.status} label={item.value} /></div>
-              <h3>{item.title}</h3>
-              <p>{item.summary || item.value}</p>
-              <div className="badge-row"><ConfidenceBadge confidence={item.confidence} /><ProvenanceBadge provenance={item.provenance} />{item.verificationRequired && <span className="badge badge-uncertain">Needs Verification</span>}</div>
-              <div className="source-row"><span>Source: {item.sourceName || 'Source not yet confirmed'}</span><span>{item.retrievedAt ? `Retrieved ${item.retrievedAt}` : 'Date not available'}</span></div>
-            </article>
-          ))}
+    <div className="content-grid">
+      <section className="panel span-2">
+        <div className="section-heading">
+          <span className="eyebrow">Evidence Collection</span>
+          <h2>Uploaded evidence inventory</h2>
+          <p>Facts, claims, assumptions, and conceptual materials remain visibly distinct.</p>
         </div>
-      )}
-    </section>
+        <div className="workspace-evidence-actions">
+          <input ref={inputRef} className="visually-hidden" type="file" accept={ACCEPT_ATTRIBUTE} multiple onChange={onFiles} />
+          <button className="button button-primary" type="button" disabled={working} onClick={() => inputRef.current?.click()}>Add or Retry Evidence</button>
+          <span>Reselect a failed file to retry. Maximum {MAX_EVIDENCE_FILES} files, {MAX_EVIDENCE_FILE_SIZE_LABEL} each.</span>
+        </div>
+        {systemStatus?.secureUploadsEnabled && systemStatus.controlledBetaGate ? (
+          <label className="workspace-beta-code">Controlled beta access code<input type="password" value={betaCode} onChange={(event) => setBetaCode(event.target.value)} autoComplete="off" /></label>
+        ) : (
+          <div className="storage-truth-banner"><strong>INTAKE UI COMPLETE — SECURE STORAGE REQUIRED BEFORE PUBLIC FILE UPLOAD</strong><span>Evidence metadata is preserved, but file contents are not persisted until private storage and tester access are configured.</span></div>
+        )}
+        {project.assets.length === 0 ? (
+          <div className="empty-state compact">
+            <h3>No property files are attached</h3>
+            <p>Add evidence from a new investigation intake. Uploading a file never starts analysis automatically.</p>
+            <Link className="button button-secondary" href="/sites/new">Start another investigation</Link>
+          </div>
+        ) : (
+          <div className="evidence-inventory">
+            {project.assets.map((asset) => <AssetCard key={asset.id} asset={asset} />)}
+          </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <span className="eyebrow">Missing Information</span>
+        <h2>Still unresolved</h2>
+        <ul className="check-list warning-list">
+          {(project.missingInformation?.length ? project.missingInformation : defaultMissingInformation).map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      </section>
+
+      <section className="panel">
+        <span className="eyebrow">Structured Evidence</span>
+        <h2>Property evidence records</h2>
+        {project.evidence.length === 0 ? <p>No public-record or professional evidence has been retrieved.</p> : (
+          <div className="evidence-stack">
+            {project.evidence.map((item) => (
+              <article className="evidence-card" key={item.id}>
+                <div className="card-row"><StatusBadge tone={item.status} label={item.value} /><ConfidenceBadge confidence={item.confidence} /></div>
+                <h3>{item.title}</h3>
+                <p>{item.summary || item.value}</p>
+                <div className="card-row"><ProvenanceBadge provenance={item.provenance} /><span className="verification-label">{item.verificationStatus || (item.verificationRequired ? 'Needs verification' : 'Unreviewed')}</span></div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
-function AnalysisView({ project, onRun, working }: { project: SiteProject; onRun: () => void; working: boolean }) {
-  const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('NFE Analysis');
-  const latestRun = project.nfeOsRuns?.[0];
-  const nfeFindings = latestRun?.nfeAnalysis?.findings ?? project.findings;
-  const groups = Object.entries(findingLabels) as Array<[AnalysisFinding['category'], string]>;
-
+function AssetCard({ asset }: { asset: PropertyAsset }) {
   return (
-    <section>
-      <div className="section-heading">
-        <div>
-          <span className="eyebrow">NFE-OS Decision Support</span>
-          <h2>NFE, HDP, and RRS remain separate.</h2>
-          <p>Builder #2 uses only its local adapter contract. The protected NFE-OS Platform, browser archive, DOM, prompts, lineage, and localStorage are not imported or modified.</p>
+    <article className="asset-card">
+      <div className="asset-icon" aria-hidden="true">{asset.type === 'PHOTO' ? '▧' : '▤'}</div>
+      <div className="asset-main">
+        <strong>{asset.originalFilename || asset.filename}</strong>
+        <span>{asset.mimeType || 'Unknown type'} · {formatBytes(asset.sizeBytes || 0)}</span>
+        <p>{asset.sourceDescription || 'No source description provided.'}</p>
+        <div className="asset-tags">
+          <span>{asset.sourceCategory || 'Unclassified evidence'}</span>
+          <span>{asset.verificationStatus || 'Unreviewed'}</span>
+          <span>{asset.truthClass || 'USER-PROVIDED CLAIM'}</span>
+          <span className={`upload-state upload-${(asset.uploadStatus || 'SECURE_STORAGE_REQUIRED').toLowerCase().replaceAll('_', '-')}`}>{asset.uploadStatus || 'SECURE_STORAGE_REQUIRED'}</span>
         </div>
-        <button className="button button-primary" onClick={onRun} disabled={working}>{latestRun ? 'Run Again Manually' : 'Run DEVELOPMENT / MOCK Analysis'}</button>
       </div>
-
-      <div className="analysis-governance-banner">
-        <strong>{latestRun?.isMock !== false ? 'DEVELOPMENT / MOCK' : 'NFE-OS SERVICE'}</strong>
-        <span>Structured analysis and decision support only. Further verification required. Final decisions remain human-controlled.</span>
+      <div className="asset-security">
+        {asset.uploadStatus === 'SAVED_PRIVATE' ? 'Private object stored' : 'File content not persisted'}
       </div>
-
-      <div className="analysis-subtabs">
-        {analysisTabs.map((item) => (
-          <button key={item} className={analysisTab === item ? 'active' : ''} onClick={() => setAnalysisTab(item)}>{item}</button>
-        ))}
-      </div>
-
-      {analysisTab === 'NFE Analysis' && (
-        nfeFindings.length === 0 ? <Empty title="NFE Analysis has not been run" text="Use the explicit Run NFE-OS Analysis control. No model calls occur automatically on page load." /> : (
-          <div className="analysis-stack">
-            {groups.map(([category, label]) => {
-              const items = nfeFindings.filter((finding) => finding.category === category);
-              if (!items.length) return null;
-              return (
-                <article className="analysis-section" key={category}>
-                  <div className="analysis-section-title"><span>{label}</span><small>{items.length} finding{items.length === 1 ? '' : 's'}</small></div>
-                  {items.map((item) => (
-                    <div className="finding-row" key={item.id}>
-                      <div className={`importance-dot importance-${item.importance.toLowerCase()}`} />
-                      <div><p>{item.statement}</p><small>Producer: NFE Analysis · Importance {item.importance} · Confidence {item.confidence}</small></div>
-                    </div>
-                  ))}
-                </article>
-              );
-            })}
-          </div>
-        )
-      )}
-
-      {analysisTab === 'HDP Discovery' && (
-        latestRun?.hdpAnalysis ? (
-          <SystemOutput title="HDP Discovery" requestId={latestRun.hdpRequestId} generatedAt={latestRun.hdpAnalysis.generatedAt} items={latestRun.hdpAnalysis.discoveries} />
-        ) : <Empty title="HDP Discovery not available" text="HDP remains a distinct output. Run the explicit analysis workflow to populate the current DEVELOPMENT / MOCK adapter result." />
-      )}
-
-      {analysisTab === 'RRS Review' && (
-        latestRun?.rrsReview ? (
-          <div className="analysis-stack">
-            <article className="analysis-section"><div className="analysis-section-title"><span>RRS Verdict</span><small>{latestRun.rrsRequestId}</small></div><div className="finding-row"><div className="importance-dot importance-medium" /><div><p>{latestRun.rrsReview.verdict}</p><small>Producer: RRS Review · Independent review output</small></div></div></article>
-            <SystemOutput title="Strengths" items={latestRun.rrsReview.strengths} />
-            <SystemOutput title="Concerns" items={latestRun.rrsReview.concerns} />
-            <SystemOutput title="Recommendations" items={latestRun.rrsReview.recommendations} />
-          </div>
-        ) : <Empty title="RRS Review not available" text="RRS remains separate from NFE and HDP. No anonymous merged AI answer is generated." />
-      )}
-
-      {analysisTab === 'Overall Summary' && (
-        latestRun?.overallSummary ? (
-          <article className="analysis-section overall-summary-card">
-            <div className="analysis-section-title"><span>Overall Summary</span><small>Derived from separately preserved NFE / HDP / RRS outputs</small></div>
-            <div className="finding-row"><div className="importance-dot importance-low" /><div><p>{latestRun.overallSummary}</p><small>Real-estate case ID: {latestRun.realEstateCaseId} · Adapter: {latestRun.adapterVersion} · Status: {latestRun.status}</small></div></div>
-          </article>
-        ) : <Empty title="Overall Summary not available" text="The summary is created only after separate NFE, HDP, and RRS outputs are available." />
-      )}
-
-      {latestRun?.errorMessage && (
-        <div className="analysis-error-state"><strong>NFE-OS analysis unavailable</strong><p>{latestRun.errorMessage}</p><small>Property data was preserved. No automatic retry was started.</small></div>
-      )}
-    </section>
-  );
-}
-
-function SystemOutput({ title, requestId, generatedAt, items }: { title: string; requestId?: string; generatedAt?: string; items: string[] }) {
-  return (
-    <article className="analysis-section">
-      <div className="analysis-section-title"><span>{title}</span><small>{requestId ?? 'Separate stored output'}</small></div>
-      {items.map((item) => <div className="finding-row" key={item}><div className="importance-dot importance-medium" /><div><p>{item}</p><small>{generatedAt ? `Generated ${generatedAt}` : 'Decision-support output'}</small></div></div>)}
     </article>
   );
 }
 
-function ScenarioView({ project, onSelect }: { project: SiteProject; onSelect: (id: string) => void }) {
+function NfeStage({ project, run, onReview, working }: { project: SiteProject; run?: NfeOsIntegrationRun; onReview: () => void; working: boolean }) {
+  const output = run?.nfeAnalysis;
   return (
-    <section>
-      <div className="section-heading"><div><span className="eyebrow">Development Scenarios</span><h2>Compare directions. The human chooses.</h2><p>No scenario is automatically declared the winner.</p></div></div>
-      {project.scenarios.length === 0 ? <Empty title="No scenarios yet" text="Run Site Analysis first to create the mock scenario comparison set." /> : (
-        <div className="scenario-grid">
-          {project.scenarios.map((scenario) => {
-            const selected = project.selectedScenarioId === scenario.id;
-            return (
-              <article className={selected ? 'scenario-card selected' : 'scenario-card'} key={scenario.id}>
-                <div className="card-label-row"><span className="stage-pill">{scenario.type.replaceAll('_', ' ')}</span><ConfidenceBadge confidence={scenario.confidence} /></div>
-                <h3>{scenario.name}</h3><p className="scenario-concept">{scenario.concept}</p>
-                <h4>Why it may fit</h4><p>{scenario.whyItMayFit}</p>
-                <div className="scenario-columns"><div><h4>Advantages</h4><ul>{scenario.advantages.map((item) => <li key={item}>{item}</li>)}</ul></div><div><h4>Constraints</h4><ul>{scenario.constraints.map((item) => <li key={item}>{item}</li>)}</ul></div></div>
-                <div className="unknown-box"><strong>Critical unknowns</strong><p>{scenario.criticalUnknowns.join(' · ')}</p></div>
-                <div className="next-step"><small>Next verification step</small><p>{scenario.nextVerificationStep}</p></div>
-                <button className={selected ? 'button button-selected' : 'button button-secondary'} onClick={() => onSelect(scenario.id)}>{selected ? '✓ Selected by Human' : 'Select This Scenario'}</button>
-              </article>
-            );
+    <div className="content-grid">
+      <section className="panel span-2">
+        <span className="eyebrow">NFE Analysis</span>
+        <h2>Structured property analysis</h2>
+        <p>NFE Analysis runs only after a human reviews the request and confirms which evidence will be included.</p>
+        <button className="button button-primary" onClick={onReview} disabled={working}>{output ? 'Review and rerun NFE Analysis' : 'Review NFE Analysis Request'}</button>
+      </section>
+      {!output ? <StageEmpty text="No NFE Analysis has been requested for this investigation." /> : (
+        <section className="analysis-grid span-2">
+          {Object.entries(findingLabels).map(([category, label]) => {
+            const items = output.findings.filter((finding) => finding.category === category);
+            if (!items.length) return null;
+            return <article className="analysis-group" key={category}><h3>{label}</h3>{items.map((finding) => <div className="finding-card" key={finding.id}><strong>{finding.statement}</strong><div className="card-row"><span>Importance: {finding.importance}</span><ConfidenceBadge confidence={finding.confidence} /></div></div>)}</article>;
           })}
-        </div>
+        </section>
       )}
-    </section>
+      <Disclosure />
+    </div>
   );
 }
 
-function RiskView({ project }: { project: SiteProject }) {
-  const risks = project.risks.length ? project.risks : [{ id: 'default-risk', category: 'Evidence Gap', title: 'Evidence remains incomplete', description: 'Live zoning, parcel, flood, utility, environmental, engineering, and market sources are not connected in this MVP.', severity: 'HIGH' as const, status: 'NEEDS_VERIFICATION' as const, confidence: 'HIGH' as const, verificationRequired: true }];
-  return <section><div className="section-heading"><div><span className="eyebrow">Risks</span><h2>Make uncertainty hard to ignore.</h2></div></div><div className="risk-grid">{risks.map((risk) => <article className="risk-card" key={risk.id}><span className={`risk-severity severity-${risk.severity.toLowerCase()}`}>{risk.severity}</span><span className="eyebrow">{risk.category}</span><h3>{risk.title}</h3><p>{risk.description}</p><div className="badge-row"><span className="badge badge-uncertain">{risk.status.replaceAll('_', ' ')}</span><ConfidenceBadge confidence={risk.confidence} /></div></article>)}</div></section>;
+function HdpStage({ output, canRun, onRun, working }: { output?: HdpDiscoveryOutput; canRun: boolean; onRun: () => void; working: boolean }) {
+  return (
+    <div className="content-grid">
+      <section className="panel span-2"><span className="eyebrow">HDP Discovery</span><h2>Hidden discovery remains separate</h2><p>HDP does not run automatically with NFE Analysis.</p><button className="button button-primary" disabled={!canRun || working} onClick={onRun}>{output ? 'Run HDP Again' : 'Run HDP Discovery'}</button></section>
+      {!output ? <StageEmpty text={canRun ? 'NFE Analysis is available. HDP awaits a separate human request.' : 'Run NFE Analysis before HDP Discovery.'} /> : <section className="panel span-2"><div className="analysis-governance-banner"><strong>DEVELOPMENT / MOCK</strong><span>Test output only</span></div><ul className="check-list">{output.discoveries.map((item) => <li key={item}>{item}</li>)}</ul></section>}
+    </div>
+  );
 }
 
-function VisualView({ project, selectedScenario }: { project: SiteProject; selectedScenario?: DevelopmentScenario }) {
-  const hero = project.assets.find((asset) => asset.isPrimary && asset.dataUrl)?.dataUrl;
-  return <section><div className="section-heading"><div><span className="eyebrow">Visual Concept Workspace</span><h2>Raw property → visualized future.</h2><p>The original property image is preserved. Generated imagery will always be stored separately.</p></div></div><div className="before-after"><div className="visual-panel">{hero ? <img src={hero} alt="Original property" /> : <div className="visual-placeholder"><span>BEFORE</span><strong>No source image uploaded</strong></div>}<small>Original property context</small></div><div className="visual-arrow">→</div><div className="visual-panel"><div className="visual-placeholder proposed"><span>PROPOSED CONCEPT</span><strong>Image-generation provider not connected</strong><p>{selectedScenario ? selectedScenario.concept : 'Select a scenario to define the starting concept.'}</p></div><small>Future generated concept</small></div></div><div className="concept-form"><label>Concept description<textarea defaultValue={selectedScenario?.concept || ''} placeholder="Describe the concept to visualize…" /></label><div className="form-two-col"><label>Architectural style<input placeholder="Modern, industrial adaptive reuse…" /></label><label>Number of floors<input type="number" min="1" placeholder="3" /></label></div><div className="form-two-col"><label>Possible use<input defaultValue={selectedScenario?.name || ''} /></label><label>Parking concept<input placeholder="Surface, structured, reduced parking…" /></label></div><label>Site layout / landscaping notes<textarea placeholder="Describe access, setbacks, open space, landscaping…" /></label><button className="button button-disabled" disabled>Generate Visual Concept — Provider Coming Later</button></div></section>;
+function RrsStage({ output, canRun, onRun, working }: { output?: RrsReviewOutput; canRun: boolean; onRun: () => void; working: boolean }) {
+  return (
+    <div className="content-grid">
+      <section className="panel span-2"><span className="eyebrow">RRS Review</span><h2>Independent review stage</h2><p>RRS remains separate from NFE and HDP and requires a separate human request.</p><button className="button button-primary" disabled={!canRun || working} onClick={onRun}>{output ? 'Run RRS Again' : 'Run RRS Review'}</button></section>
+      {!output ? <StageEmpty text={canRun ? 'NFE and HDP are ready. RRS awaits a separate human request.' : 'Complete NFE Analysis and HDP Discovery before RRS Review.'} /> : <section className="panel span-2"><div className="analysis-governance-banner"><strong>DEVELOPMENT / MOCK</strong><span>Test output only</span></div><h3>{output.verdict}</h3><h4>Strengths</h4><ul className="check-list">{output.strengths.map((item) => <li key={item}>{item}</li>)}</ul><h4>Concerns</h4><ul className="check-list warning-list">{output.concerns.map((item) => <li key={item}>{item}</li>)}</ul><h4>Recommendations</h4><ul className="check-list">{output.recommendations.map((item) => <li key={item}>{item}</li>)}</ul></section>}
+    </div>
+  );
 }
 
-function ProjectPlanView({ project, selectedScenario }: { project: SiteProject; selectedScenario?: DevelopmentScenario }) {
-  return <section><div className="section-heading"><div><span className="eyebrow">Project Plan</span><h2>Turn a selected direction into decision gates.</h2><p>This is a preliminary planning shell, not a construction, financial, underwriting, appraisal, investment, or regulatory approval.</p></div></div><div className="plan-grid"><Plan title="Project Overview" text={selectedScenario ? `${selectedScenario.name}: ${selectedScenario.concept}` : 'No scenario selected yet. Compare scenarios and select one before treating this as a preferred direction.'} /><Plan title="Major Requirements" text="Verified parcel and zoning data; access and parking review; utility capacity; site/environmental review; preliminary design definition." /><Plan title="Dependencies" text="Authoritative public records, relevant planning authority, professional engineering/environmental review where applicable, and human capital decision." /><Plan title="Implementation Phases" text="1. Evidence verification · 2. Feasibility screen · 3. Concept refinement · 4. Professional review · 5. Cost/material analysis · 6. Decision." /><Plan title="Professional Reviews Needed" text="Planning/zoning authority, survey, civil/site engineering, environmental review, architecture, legal and financial review as the project requires." /><Plan title="Decision Gates" text="Gate 1: permitted use · Gate 2: physical feasibility · Gate 3: infrastructure/access · Gate 4: economics · Gate 5: human go/no-go." /><Plan title="Next Best Action" text={selectedScenario?.nextVerificationStep || 'Run the site analysis and select a scenario, then verify the highest-impact controlling constraint.'} /></div><div className="integration-banner"><div><span className="eyebrow">Future Integration Boundary</span><h3>Send to Cost & Materials Analysis</h3><p>Selected development concept → preliminary project definition → future TrueTakeoff integration.</p></div><button className="button button-disabled" disabled>COMING LATER</button></div></section>;
+function ScenarioStage({ project, onSelect }: { project: SiteProject; onSelect: (id: string) => void }) {
+  return (
+    <div className="scenario-grid">
+      {project.scenarios.length === 0 ? <StageEmpty text="No development scenarios exist yet. Run NFE Analysis first; the system will not declare an automatic winner." /> : project.scenarios.map((scenario) => (
+        <article className={`scenario-card ${project.selectedScenarioId === scenario.id ? 'selected' : ''}`} key={scenario.id}>
+          <span className="eyebrow">{scenario.type.replaceAll('_', ' ')}</span><h2>{scenario.name}</h2><p>{scenario.concept}</p><h4>Why it may fit</h4><p>{scenario.whyItMayFit}</p><h4>Major advantages</h4><ul>{scenario.advantages.map((item) => <li key={item}>{item}</li>)}</ul><h4>Major constraints</h4><ul>{scenario.constraints.map((item) => <li key={item}>{item}</li>)}</ul><h4>Critical unknowns</h4><ul>{scenario.criticalUnknowns.map((item) => <li key={item}>{item}</li>)}</ul><div className="card-row"><ConfidenceBadge confidence={scenario.confidence} /><span>Complexity: {scenario.complexity}</span></div><p><strong>Next verification:</strong> {scenario.nextVerificationStep}</p><button className="button button-primary" onClick={() => onSelect(scenario.id)}>{project.selectedScenarioId === scenario.id ? 'Selected by Human' : 'Select for Further Investigation'}</button>
+        </article>
+      ))}
+    </div>
+  );
 }
 
-function Info({ label, value }: { label: string; value: string }) { return <div className="info-card"><small>{label}</small><strong>{value}</strong></div>; }
-function Empty({ title, text }: { title: string; text: string }) { return <div className="empty-state compact"><h3>{title}</h3><p>{text}</p></div>; }
-function Plan({ title, text }: { title: string; text: string }) { return <article className="plan-card"><span className="eyebrow">{title}</span><p>{text}</p></article>; }
+function VisualConceptStage({ project, selectedScenario }: { project: SiteProject; selectedScenario?: DevelopmentScenario }) {
+  return (
+    <div className="content-grid">
+      <section className="panel span-2"><span className="eyebrow">Visual Concepts</span><h2>Before and proposed concept workspace</h2><p>{selectedScenario ? `Selected human direction: ${selectedScenario.name}` : 'Select a development scenario before creating a visual concept.'}</p><div className="before-after"><div><span>BEFORE</span><div className="visual-placeholder">{project.assets.some((asset) => asset.type === 'PHOTO') ? 'Property photograph preserved as source evidence' : 'Add a property photograph'}</div></div><div><span>PROPOSED CONCEPT</span><div className="visual-placeholder">Image-generation adapter not connected</div></div></div></section>
+    </div>
+  );
+}
+
+function OverallSummary({ run, project }: { run?: NfeOsIntegrationRun; project: SiteProject }) {
+  return (
+    <div className="content-grid">
+      <section className="panel span-2"><span className="eyebrow">Overall Summary</span><h2>{run?.overallSummary || 'Overall summary is not yet available.'}</h2><p>{run?.overallSummary ? 'This summary combines separately identified NFE, HDP, and RRS outputs. It remains decision support, not a professional determination.' : 'Complete NFE Analysis, HDP Discovery, and RRS Review first.'}</p></section>
+      <section className="panel"><h3>Evidence inventory</h3><p>{project.assets.length} uploaded file record(s); {project.evidence.length} structured evidence record(s).</p></section>
+      <section className="panel"><h3>Unresolved information</h3><p>{project.missingInformation?.length || defaultMissingInformation.length} verification item(s) remain visible.</p></section>
+    </div>
+  );
+}
+
+function HumanDecision({ project, selectedScenario }: { project: SiteProject; selectedScenario?: DevelopmentScenario }) {
+  return (
+    <div className="content-grid">
+      <section className="panel span-2"><span className="eyebrow">Human Decision</span><h2>{selectedScenario ? selectedScenario.name : 'No scenario selected'}</h2><p>{selectedScenario ? 'This direction was selected by the human for further investigation.' : 'PropertyScope does not automatically declare a winner.'}</p><div className="human-authority-card"><strong>KEEP FINAL GOVERNANCE HUMAN</strong><span>No output is an appraisal, underwriting approval, legal conclusion, zoning approval, investment approval, or feasibility certification.</span></div></section>
+      <section className="panel"><h3>Decision gates</h3><ul className="check-list warning-list"><li>Verify controlling public records</li><li>Resolve professional-review requirements</li><li>Confirm access, utilities, and environmental constraints</li><li>Review economics independently</li></ul></section>
+      <section className="panel"><h3>Future cost boundary</h3><p>Send to Cost &amp; Materials Analysis</p><span className="stage-pill">COMING LATER</span></section>
+    </div>
+  );
+}
+
+function AnalysisReview({ project, state, onCancel, onConfirm, working }: { project: SiteProject; state: AdapterConnectionState; onCancel: () => void; onConfirm: () => void; working: boolean }) {
+  const included = project.assets.filter((asset) => asset.uploadStatus !== 'REJECTED' && asset.uploadStatus !== 'FAILED');
+  const excluded = project.assets.filter((asset) => asset.uploadStatus === 'REJECTED' || asset.uploadStatus === 'FAILED');
+  const unverified = project.assets.filter((asset) => !asset.verificationStatus || ['Unreviewed', 'Needs verification'].includes(asset.verificationStatus));
+  const disabled = working || state === 'DISCONNECTED' || state === 'FAILED';
+  return (
+    <div className="review-overlay" role="dialog" aria-modal="true" aria-labelledby="analysis-review-title">
+      <section className="analysis-review-panel">
+        <div className="section-heading"><span className="eyebrow">Human-Controlled Request</span><h2 id="analysis-review-title">Review NFE Analysis Request</h2></div>
+        <div className="review-grid"><Detail label="Property" value={project.name} /><Detail label="Location" value={project.address || project.locationDescription || 'Unknown'} /><Detail label="Main question" value={project.primaryQuestion} /><Detail label="Connection" value={getNfeConnectionLabel(state)} /><Detail label="Analysis version" value={`${ACTIVE_NFE_ADAPTER_VERSION} · PropertyScope ${PROPERTY_SCOPE_VERSION}`} /><Detail label="Build" value={PROPERTY_SCOPE_BUILD_ID} /></div>
+        <div className="review-columns"><div><h3>Included evidence ({included.length})</h3><ul>{included.length ? included.map((asset) => <li key={asset.id}>{asset.originalFilename || asset.filename} — {asset.sourceCategory || 'Unclassified evidence'}</li>) : <li>No file evidence included</li>}</ul></div><div><h3>Excluded / failed ({excluded.length})</h3><ul>{excluded.length ? excluded.map((asset) => <li key={asset.id}>{asset.originalFilename || asset.filename} — {asset.errorMessage || asset.uploadStatus}</li>) : <li>None</li>}</ul></div></div>
+        <div className="review-columns"><div><h3>Unresolved missing information</h3><ul>{(project.missingInformation || defaultMissingInformation).map((item) => <li key={item}>{item}</li>)}</ul></div><div><h3>Unverified claims ({unverified.length})</h3><ul>{unverified.length ? unverified.map((asset) => <li key={asset.id}>{asset.originalFilename || asset.filename} — {asset.truthClass || 'USER-PROVIDED CLAIM'}</li>) : <li>No uploaded item is currently flagged as unverified</li>}</ul></div></div>
+        {state === 'MOCK' && <div className="analysis-governance-banner"><strong>MOCK — TEST OUTPUT ONLY</strong><span>No live NFE-OS service call will occur.</span></div>}
+        <div className="review-actions"><button className="button button-secondary" onClick={onCancel}>Cancel</button><button className="button button-primary" disabled={disabled} onClick={onConfirm}>{working ? 'Working…' : 'Confirm and Run NFE Analysis'}</button></div>
+      </section>
+    </div>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return <div className="detail-item"><small>{label}</small><strong>{value}</strong></div>;
+}
+
+function StageEmpty({ text }: { text: string }) {
+  return <section className="panel span-2 empty-stage"><h3>Not started</h3><p>{text}</p></section>;
+}
+
+function Disclosure() {
+  return (
+    <section className="panel span-2 beta-disclosure">
+      <strong>NFE PropertyScope is an early-stage property and development investigation tool.</strong>
+      <p>Information may be incomplete and must be independently verified. It does not replace attorney review, title examination, survey, appraisal, engineering, environmental assessment, zoning confirmation, government approval, or licensed real-estate advice.</p>
+    </section>
+  );
+}

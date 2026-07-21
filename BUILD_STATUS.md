@@ -1,93 +1,37 @@
-# NFE Site Intelligence — Builder #2 Build Status
+# NFE PropertyScope — Builder #2 Build Status
 
-## Current status
+## Canonical version
 
-Builder #2 continues as a standalone real-estate/property intelligence application.
+- Previous public version: `0.1.0`
+- Phase 1.2 version: `1.2.0`
+- Build identifier: `PS-P1.2-EVIDENCE-WORKSPACE-20260721`
+- Repository visibility baseline: Public
+- NFE adapter baseline: MOCK — TEST OUTPUT ONLY
+- HDP adapter baseline: MOCK — TEST OUTPUT ONLY
+- RRS adapter baseline: MOCK — TEST OUTPUT ONLY
+- Authentication baseline: No full user authentication
+- Controlled upload gate: Server-side invitation-code allowlist when configured
 
-The protected NFE-OS Platform remains external and untouched.
+## Verified locally
 
-## Isolation controls
-
-- Standalone local Git repository
-- No Git remote configured
-- Protected NFE-OS repository explicitly blocked by boundary check
-- Protected NFE-OS local working-directory references blocked from application source
-- No Platform `app.js` import
-- No Platform DOM scraping or click automation
-- No dependency on Platform localStorage, browser archive, workspace state, prompts, validators, or lineage
-- Separate Builder #2 environment variables, storage, database schema, and future API routes
-
-## NFE-OS integration contract
-
-All engine-specific integration is localized to:
-
-`lib/adapters/nfe-os.ts`
-
-Operations remain separate:
-
-- `runNfeAnalysis`
-- `runHdp`
-- `runRrs`
-
-Current active implementation:
-
-`MockNfeOsAdapter` — DEVELOPMENT / MOCK only
-
-Future implementation:
-
-`RemoteNfeOsAdapter` — configurable approved service base URL and localized paths. It is not instantiated by the current UI and has no default NFE-OS Platform URL.
-
-## Output separation
-
-The Property Workspace now displays separate sections for:
-
-- NFE Analysis
-- HDP Discovery
-- RRS Review
-- Overall Summary
-
-Each integration run can preserve:
-
-- real-estate case ID
-- NFE request ID
-- HDP request ID
-- RRS request ID
-- timestamps
-- adapter version
-- provider/model/service version metadata
-- mock/service flag
-- partial or failed state
-- error message
-
-## Failure isolation
-
-If a future NFE-OS service is unavailable:
-
-- the real-estate case remains saved
-- partial outputs remain preserved
-- loading ends normally
-- the user receives a clear unavailable message
-- no automatic retry occurs
-- retry remains a visible user action
-
-## Database foundation
-
-Added `nfe_os_integration_runs` to the Builder #2 Supabase schema.
-
-This table stores returned integration results in the real-estate application's database and does not modify or mirror NFE-OS Platform case lineage.
-
-## Verification
-
-- Repository boundary check: PASS
+- Builder #2 repository boundary check: PASS
 - TypeScript check: PASS
-- Production build: PASS
-- Git diff whitespace check: PASS
-- Protected Platform source-coupling scan: PASS
+- Next.js production build: PASS
+- Dashboard route: HTTP 200
+- New Investigation route: HTTP 200
+- Demo Property Workspace route: HTTP 200
+- System status route: HTTP 200
+- System status without secure environment configuration: `LOCAL_PREVIEW_ONLY`
+- NFE/HDP/RRS status without service integration: `MOCK`
 
-## Governance
+## Storage truth
 
-Human final authority remains locked.
+The original implementation compressed user images into data URLs and stored them in browser localStorage. Phase 1.2 removes user-uploaded file contents from localStorage persistence.
 
-Outputs are presented as structured analysis, decision support, evidence review, risk identification, and material requiring further verification—not guaranteed truth, legal advice, financial advice, appraisal certification, underwriting approval, or investment approval.
+The current source contains a dedicated server-side Supabase private-storage adapter, private bucket migration, ownership checks, signed temporary access, controlled-beta allowlist, validation, and rate guard. These paths are disabled unless all required server environment variables are configured.
 
-**One engine. Multiple applications. Separate repositories. Separate deployments. Controlled integration.**
+Because no dedicated Supabase project or production credentials are available in this build environment, private upload persistence and cross-tester isolation have **not** been live-tested. Do not claim full Phase 1.2 acceptance until that test is completed.
+
+## Release wording
+
+`INTAKE UI COMPLETE — SECURE STORAGE REQUIRED BEFORE PUBLIC FILE UPLOAD`

@@ -13,12 +13,13 @@ if (!fs.existsSync(packagePath) || !fs.existsSync(boundaryPath)) {
 }
 
 const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-if (pkg.name !== 'nfe-site-intelligence') {
+if (pkg.name !== 'propertyscope') {
   console.error(`Boundary check failed: unexpected package name ${pkg.name}`);
   process.exit(1);
 }
 
-if (path.basename(cwd) !== 'nfe-site-intelligence-builder2') {
+const allowedFolders = new Set(['nfe-site-intelligence-builder2', 'PropertyScope', 'NFE-PropertyScope']);
+if (!allowedFolders.has(path.basename(cwd))) {
   console.error(`Boundary check failed: unexpected repo folder ${path.basename(cwd)}`);
   process.exit(1);
 }
@@ -57,4 +58,4 @@ for (const file of sourceRoots.flatMap((root) => walk(path.join(cwd, root)))) {
   }
 }
 
-console.log('Boundary check passed: standalone NFE Site Intelligence Builder #2 repository with no protected NFE-OS remote or source coupling.');
+console.log('Boundary check passed: standalone NFE PropertyScope Builder #2 repository with no protected NFE-OS remote or source coupling.');

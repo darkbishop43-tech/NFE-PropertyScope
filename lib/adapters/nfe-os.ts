@@ -1,4 +1,5 @@
 import type {
+  AdapterConnectionState,
   AnalysisFinding,
   Confidence,
   EvidenceItem,
@@ -13,10 +14,28 @@ import type {
 /**
  * Builder #2 integration boundary.
  *
- * NFE Site Intelligence owns this interface. The protected NFE-OS Platform does not.
+ * NFE PropertyScope owns this interface. The protected NFE-OS Platform does not.
  * This file must never import Platform app.js, DOM state, localStorage keys, browser
  * archive data, or private prompt/lineage internals.
  */
+
+export const ACTIVE_NFE_ADAPTER_VERSION = 'mock-nfe-os-adapter-v0.2';
+
+export function getConfiguredNfeConnectionState(): AdapterConnectionState {
+  const mode = process.env.NEXT_PUBLIC_NFE_OS_ADAPTER_MODE?.toLowerCase();
+  if (mode === 'live') return 'LIVE';
+  if (mode === 'failed') return 'FAILED';
+  if (mode === 'disconnected') return 'DISCONNECTED';
+  return 'MOCK';
+}
+
+export function getNfeConnectionLabel(state = getConfiguredNfeConnectionState()): string {
+  if (state === 'LIVE') return 'NFE-OS CONNECTION: LIVE';
+  if (state === 'MOCK') return 'NFE-OS CONNECTION: MOCK — TEST OUTPUT ONLY';
+  if (state === 'FAILED') return 'NFE-OS CONNECTION: UNAVAILABLE — RETRY';
+  return 'NFE-OS CONNECTION: NOT CONNECTED';
+}
+
 export interface RealEstateNfePayload {
   domain: 'real-estate';
   realEstateCaseId: string;
@@ -84,7 +103,7 @@ function mockProviderMetadata(): NfeProviderMetadata {
 }
 
 export class MockNfeOsAdapter implements NfeOsAdapter {
-  readonly adapterVersion = 'mock-nfe-os-adapter-v0.2';
+  readonly adapterVersion = ACTIVE_NFE_ADAPTER_VERSION;
   readonly isMock = true;
 
   async runNfeAnalysis(input: RealEstateNfePayload): Promise<NfeAnalysisOutput> {

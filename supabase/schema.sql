@@ -1,4 +1,4 @@
--- NFE Site Intelligence — database foundation v0.1
+-- NFE PropertyScope — database foundation with Phase 1.2 private-evidence extension
 -- This schema belongs only to the standalone Builder #2 application.
 
 create extension if not exists pgcrypto;
@@ -151,3 +151,34 @@ create table if not exists nfe_os_integration_runs (
 
 create index if not exists idx_nfe_os_integration_runs_project_started
   on nfe_os_integration_runs(project_id, started_at desc);
+
+-- ==========================================================
+-- NFE PropertyScope Phase 1.2 private evidence extension
+-- Apply the matching migration before enabling public uploads.
+-- ==========================================================
+
+alter table if exists property_assets
+  add column if not exists sanitized_filename text,
+  add column if not exists byte_size bigint,
+  add column if not exists upload_timestamp timestamptz,
+  add column if not exists uploader_id uuid,
+  add column if not exists source_category text,
+  add column if not exists source_description text,
+  add column if not exists storage_object_reference text,
+  add column if not exists upload_status text not null default 'SECURE_STORAGE_REQUIRED',
+  add column if not exists verification_status text not null default 'Unreviewed',
+  add column if not exists provenance_label text,
+  add column if not exists truth_class text not null default 'USER-PROVIDED CLAIM';
+
+alter table if exists site_projects enable row level security;
+alter table if exists property_assets enable row level security;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'property-evidence', 'property-evidence', false, 20971520,
+  array['image/jpeg','image/png','image/webp','application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','text/plain','text/csv']
+)
+on conflict (id) do update set
+  public = false,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;

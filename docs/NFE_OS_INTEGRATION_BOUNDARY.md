@@ -2,7 +2,7 @@
 
 ## Rule
 
-NFE Site Intelligence may **use** an approved NFE-OS service. It may never modify the NFE-OS Platform to make integration easier.
+NFE PropertyScope may **use** an approved NFE-OS service. It may never modify the NFE-OS Platform to make integration easier.
 
 ## Local adapter contract
 

@@ -1,6 +1,6 @@
 {
-  "name": "nfe-site-intelligence",
-  "version": "0.1.0",
+  "name": "propertyscope",
+  "version": "1.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -8,7 +8,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "boundary-check": "node scripts/assert-isolated-repo.mjs",
-    "verify": "npm run boundary-check && npm run typecheck && npm run build"
+    "verify": "npm run boundary-check && npm run phase-1-2-check && npm run typecheck && npm run build",
+    "phase-1-2-check": "node scripts/phase-1-2-check.mjs"
   },
   "dependencies": {
     "next": "^16.2.10",
