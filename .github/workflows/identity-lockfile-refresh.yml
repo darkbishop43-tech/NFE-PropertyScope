@@ -1,0 +1,36 @@
+name: Identity lockfile refresh
+
+on:
+  push:
+    branches:
+      - identity/phase-a-private-research
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: identity/phase-a-private-research
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Refresh package lock
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Commit lockfile only if changed
+        shell: bash
+        run: |
+          if git diff --quiet -- package-lock.json; then
+            echo "Lockfile already current."
+            exit 0
+          fi
+          git config user.name "nfe-scope-builder"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "IDENTITY Phase A: refresh Supabase dependency lockfile"
+          git push origin HEAD:identity/phase-a-private-research
