@@ -11,6 +11,8 @@
     "verify": "npm run boundary-check && npm run typecheck && npm run build"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.6.1",
+    "@supabase/supabase-js": "^2.52.1",
     "next": "^16.2.10",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
