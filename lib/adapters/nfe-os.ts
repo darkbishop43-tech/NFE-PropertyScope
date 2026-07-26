@@ -1,5 +1,4 @@
 import type {
-  AnalysisFinding,
   Confidence,
   EvidenceItem,
   HdpDiscoveryOutput,
@@ -11,11 +10,11 @@ import type {
 } from '../types';
 
 /**
- * Builder #2 integration boundary.
+ * PropertyScope integration contract only.
  *
- * NFE Site Intelligence owns this interface. The protected NFE-OS Platform does not.
- * This file must never import Platform app.js, DOM state, localStorage keys, browser
- * archive data, or private prompt/lineage internals.
+ * MOCK is safe to use in client-side research UX. The real RemoteNfeOsAdapter
+ * lives exclusively in lib/server/remote-nfe-os-adapter.ts so a PLATFORM bearer
+ * credential can never be bundled into browser code.
  */
 export interface RealEstateNfePayload {
   domain: 'real-estate';
@@ -147,65 +146,7 @@ export class MockNfeOsAdapter implements NfeOsAdapter {
   }
 }
 
-export interface NfeOsServiceConfig {
-  baseUrl: string;
-  apiKey?: string;
-  paths?: {
-    nfe?: string;
-    hdp?: string;
-    rrs?: string;
-  };
-}
-
-/**
- * Future approved service implementation. Keep this server-side behind Builder #2's
- * own API routes when credentials are required. It has no default Platform URL and
- * performs no automatic retries. Endpoint changes remain localized here.
- */
-export class RemoteNfeOsAdapter implements NfeOsAdapter {
-  readonly adapterVersion = 'remote-nfe-os-adapter-v0.1';
-  readonly isMock = false;
-  private readonly config: NfeOsServiceConfig;
-
-  constructor(config: NfeOsServiceConfig) {
-    if (!config.baseUrl.trim()) throw new Error('An approved NFE-OS service base URL is required.');
-    this.config = config;
-  }
-
-  private async post<T>(path: string, body: unknown): Promise<T> {
-    const response = await fetch(`${this.config.baseUrl.replace(/\/$/, '')}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(this.config.apiKey ? { authorization: `Bearer ${this.config.apiKey}` } : {})
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      throw new Error(`NFE-OS analysis is temporarily unavailable. Property data has been preserved. Service returned ${response.status}.`);
-    }
-
-    return response.json() as Promise<T>;
-  }
-
-  runNfeAnalysis(input: RealEstateNfePayload): Promise<NfeAnalysisOutput> {
-    return this.post<NfeAnalysisOutput>(this.config.paths?.nfe ?? '/nfe/analyze', input);
-  }
-
-  runHdp(input: HdpRequest): Promise<HdpDiscoveryOutput> {
-    return this.post<HdpDiscoveryOutput>(this.config.paths?.hdp ?? '/hdp/run', input);
-  }
-
-  runRrs(input: RrsRequest): Promise<RrsReviewOutput> {
-    return this.post<RrsReviewOutput>(this.config.paths?.rrs ?? '/rrs/review', input);
-  }
-}
-
-/**
- * Explicit unavailable implementation used when integration is disabled.
- * It deliberately has no default Platform URL and never retries automatically.
- */
+/** Explicit unavailable adapter used when LIVE integration is disabled. */
 export class UnavailableNfeOsAdapter implements NfeOsAdapter {
   readonly adapterVersion = 'unavailable-nfe-os-adapter-v0.1';
   readonly isMock = false;
