@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "boundary-check": "node scripts/assert-isolated-repo.mjs",
     "verify": "npm run boundary-check && npm run protected-adapter-check && npm run typecheck && npm run build",
-    "protected-adapter-check": "node scripts/protected-adapter-check.mjs"
+    "protected-adapter-check": "node scripts/protected-adapter-check.mjs",
+    "correlation-check": "node --experimental-strip-types --test tests/propertyscope-safe-correlation.test.mjs"
   },
   "dependencies": {
     "next": "^16.2.10",
