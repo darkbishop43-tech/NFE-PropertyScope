@@ -27,7 +27,6 @@ jobs:
 
       - name: Apply bounded diagnostic source correction
         working-directory: nfe-site-intelligence-builder2
-        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -35,20 +34,14 @@ jobs:
           server_path = Path('lib/server/nfe-os-protected.ts')
           server = server_path.read_text()
 
-          old = """export type CorrelationFailureCode =
+          type_anchor = """export type CorrelationFailureCode =
             | 'CASE_ID_MISMATCH'
             | 'MODULE_MISMATCH'
             | 'CALLER_REQUEST_ID_MISMATCH'
             | 'MISSING_PLATFORM_REQUEST_ID'
             | 'SAFE_CORRELATION_MISSING_OR_INVALID';
           """
-          new = """export type CorrelationFailureCode =
-            | 'CASE_ID_MISMATCH'
-            | 'MODULE_MISMATCH'
-            | 'CALLER_REQUEST_ID_MISMATCH'
-            | 'MISSING_PLATFORM_REQUEST_ID'
-            | 'SAFE_CORRELATION_MISSING_OR_INVALID';
-
+          type_insert = type_anchor + """
           export type CorrelationComparison = 'MATCH' | 'MISMATCH' | 'ABSENT';
           export type CorrelationPresence = 'PRESENT' | 'ABSENT';
           export type CorrelationPassFail = 'PASS' | 'FAIL';
@@ -71,11 +64,12 @@ jobs:
             detail?: 'CORRELATION_OBJECT_MISSING' | 'CONTRACT_VERSION_MISMATCH' | 'SAFE_RESPONSE_GENERATED_NOT_TRUE' | 'CORRELATION_REQUEST_ID_MISSING' | 'CORRELATION_REQUEST_ID_MISMATCH';
           }
           """
-          if old not in server:
-              raise SystemExit('correlation type anchor not found')
-          server = server.replace(old, new, 1)
+          if 'export interface CorrelationDiagnostic' not in server:
+              if type_anchor not in server:
+                  raise SystemExit('correlation type anchor not found')
+              server = server.replace(type_anchor, type_insert, 1)
 
-          old = """export class ProtectedResearchError extends Error {
+          old_class = """export class ProtectedResearchError extends Error {
             readonly status: number;
             readonly code: string;
             readonly retryable: boolean;
@@ -89,7 +83,7 @@ jobs:
             }
           }
           """
-          new = """export class ProtectedResearchError extends Error {
+          new_class = """export class ProtectedResearchError extends Error {
             readonly status: number;
             readonly code: string;
             readonly retryable: boolean;
@@ -111,65 +105,16 @@ jobs:
             }
           }
           """
-          if old not in server:
-              raise SystemExit('error class anchor not found')
-          server = server.replace(old, new, 1)
+          if 'readonly diagnostic?: CorrelationDiagnostic' not in server:
+              if old_class not in server:
+                  raise SystemExit('error class anchor not found')
+              server = server.replace(old_class, new_class, 1)
 
-          old = """function correlationFailure(code: CorrelationFailureCode): never {
-            throw new ProtectedResearchError(
-              'Protected service response correlation did not match the active PropertyScope case.',
-              502,
-              code,
-              false
-            );
-          }
-
-          export function validatePlatformCorrelation(
-            body: PlatformEnvelope,
-            expectedCaseId: string,
-            operation: ProtectedResearchOperation,
-            expectedCallerRequestId: string
-          ): ProtectedServiceCorrelation {
-            if (!body.requestId || typeof body.requestId !== 'string') {
-              correlationFailure('MISSING_PLATFORM_REQUEST_ID');
-            }
-            if (body.caseId !== expectedCaseId) {
-              correlationFailure('CASE_ID_MISMATCH');
-            }
-            if (body.module !== operation) {
-              correlationFailure('MODULE_MISMATCH');
-            }
-
-            const correlation = body.correlation;
-            if (!correlation
-              || correlation.contractVersion !== SAFE_CORRELATION_CONTRACT_VERSION
-              || correlation.safeResponseGenerated !== true) {
-              correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID');
-            }
-            if (correlation.caseId !== expectedCaseId) {
-              correlationFailure('CASE_ID_MISMATCH');
-            }
-            if (!isValidCallerRequestId(correlation.callerRequestId)
-              || correlation.callerRequestId !== expectedCallerRequestId) {
-              correlationFailure('CALLER_REQUEST_ID_MISMATCH');
-            }
-            if (!correlation.requestId || correlation.requestId !== body.requestId) {
-              correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID');
-            }
-
-            return {
-              contractVersion: SAFE_CORRELATION_CONTRACT_VERSION,
-              callerRequestId: correlation.callerRequestId,
-              requestId: body.requestId,
-              caseId: expectedCaseId,
-              furthestExecutionReceipt: correlation.furthestExecutionReceipt,
-              safeResponseGenerated: true,
-              failureStage: correlation.failureStage,
-              retryable: correlation.retryable
-            };
-          }
-          """
-          new = """const SAFE_RECEIPTS = new Set([
+          start = server.find('function correlationFailure(code: CorrelationFailureCode): never {')
+          end = server.find('function stringsFromSections', start)
+          if start < 0 or end < 0:
+              raise SystemExit('correlation validator block not found')
+          validator = """const SAFE_RECEIPTS = new Set([
             'PLATFORM_ROUTE_REACHED',
             'PROTECTED_BEARER_ACCEPTED',
             'PROTECTED_OPERATION_STARTED',
@@ -216,7 +161,6 @@ jobs:
             const safeExecutionReceipt = typeof correlation?.furthestExecutionReceipt === 'string' && SAFE_RECEIPTS.has(correlation.furthestExecutionReceipt)
               ? correlation.furthestExecutionReceipt
               : undefined;
-
             return {
               classification,
               operation,
@@ -256,13 +200,7 @@ jobs:
           }
 
           function correlationFailure(code: CorrelationFailureCode, diagnostic: CorrelationDiagnostic): never {
-            throw new ProtectedResearchError(
-              diagnosticMessage(diagnostic),
-              502,
-              code,
-              false,
-              diagnostic
-            );
+            throw new ProtectedResearchError(diagnosticMessage(diagnostic), 502, code, false, diagnostic);
           }
 
           export function validatePlatformCorrelation(
@@ -273,69 +211,36 @@ jobs:
             status?: number
           ): ProtectedServiceCorrelation {
             if (!body.requestId || typeof body.requestId !== 'string') {
-              correlationFailure(
-                'MISSING_PLATFORM_REQUEST_ID',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'MISSING_PLATFORM_REQUEST_ID', status)
-              );
+              correlationFailure('MISSING_PLATFORM_REQUEST_ID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'MISSING_PLATFORM_REQUEST_ID', status));
             }
             if (body.caseId !== expectedCaseId) {
-              correlationFailure(
-                'CASE_ID_MISMATCH',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'CASE_ID_MISMATCH', status)
-              );
+              correlationFailure('CASE_ID_MISMATCH', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'CASE_ID_MISMATCH', status));
             }
             if (body.module !== operation) {
-              correlationFailure(
-                'MODULE_MISMATCH',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'MODULE_MISMATCH', status)
-              );
+              correlationFailure('MODULE_MISMATCH', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'MODULE_MISMATCH', status));
             }
-
             const correlation = body.correlation;
             if (!correlation) {
-              correlationFailure(
-                'SAFE_CORRELATION_MISSING_OR_INVALID',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CORRELATION_OBJECT_MISSING')
-              );
+              correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CORRELATION_OBJECT_MISSING'));
             }
             if (correlation.contractVersion !== SAFE_CORRELATION_CONTRACT_VERSION) {
-              correlationFailure(
-                'SAFE_CORRELATION_MISSING_OR_INVALID',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CONTRACT_VERSION_MISMATCH')
-              );
+              correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CONTRACT_VERSION_MISMATCH'));
             }
             if (correlation.safeResponseGenerated !== true) {
-              correlationFailure(
-                'SAFE_CORRELATION_MISSING_OR_INVALID',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'SAFE_RESPONSE_GENERATED_NOT_TRUE')
-              );
+              correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'SAFE_RESPONSE_GENERATED_NOT_TRUE'));
             }
             if (correlation.caseId !== expectedCaseId) {
-              correlationFailure(
-                'CASE_ID_MISMATCH',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'CASE_ID_MISMATCH', status)
-              );
+              correlationFailure('CASE_ID_MISMATCH', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'CASE_ID_MISMATCH', status));
             }
-            if (!isValidCallerRequestId(correlation.callerRequestId)
-              || correlation.callerRequestId !== expectedCallerRequestId) {
-              correlationFailure(
-                'CALLER_REQUEST_ID_MISMATCH',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'CALLER_REQUEST_ID_MISMATCH', status)
-              );
+            if (!isValidCallerRequestId(correlation.callerRequestId) || correlation.callerRequestId !== expectedCallerRequestId) {
+              correlationFailure('CALLER_REQUEST_ID_MISMATCH', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'CALLER_REQUEST_ID_MISMATCH', status));
             }
             if (!correlation.requestId) {
-              correlationFailure(
-                'SAFE_CORRELATION_MISSING_OR_INVALID',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CORRELATION_REQUEST_ID_MISSING')
-              );
+              correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CORRELATION_REQUEST_ID_MISSING'));
             }
             if (correlation.requestId !== body.requestId) {
-              correlationFailure(
-                'SAFE_CORRELATION_MISSING_OR_INVALID',
-                buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CORRELATION_REQUEST_ID_MISMATCH')
-              );
+              correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CORRELATION_REQUEST_ID_MISMATCH'));
             }
-
             return {
               contractVersion: SAFE_CORRELATION_CONTRACT_VERSION,
               callerRequestId: correlation.callerRequestId,
@@ -347,70 +252,57 @@ jobs:
               retryable: correlation.retryable
             };
           }
-          """
-          if old not in server:
-              raise SystemExit('correlation validator anchor not found')
-          server = server.replace(old, new, 1)
 
-          old = """  const serviceCorrelation = validatePlatformCorrelation(
+          """
+          server = server[:start] + validator + server[end:]
+
+          call_anchor = """  const serviceCorrelation = validatePlatformCorrelation(
             data,
             request.payload.realEstateCaseId,
             request.operation,
             callerRequestId
-          );
-          """
-          new = """  const serviceCorrelation = validatePlatformCorrelation(
+          );"""
+          call_replacement = """  const serviceCorrelation = validatePlatformCorrelation(
             data,
             request.payload.realEstateCaseId,
             request.operation,
             callerRequestId,
             response.status
-          );
-          """
-          if old not in server:
+          );"""
+          if call_anchor not in server:
               raise SystemExit('validator invocation anchor not found')
-          server = server.replace(old, new, 1)
+          server = server.replace(call_anchor, call_replacement, 1)
           server_path.write_text(server)
 
           route_path = Path('app/api/nfe-os/research/route.ts')
           route = route_path.read_text()
-          old = """      error: {
-                code: failure.code,
-                message: failure.message,
-                retryable: failure.retryable
-              }
-          """
-          new = """      error: {
-                code: failure.code,
-                message: failure.message,
-                retryable: failure.retryable,
+          route_anchor = """        retryable: failure.retryable
+              }"""
+          route_replacement = """        retryable: failure.retryable,
                 ...(failure.diagnostic ? { diagnostic: failure.diagnostic } : {})
-              }
-          """
-          if old not in route:
+              }"""
+          if route_anchor not in route:
               raise SystemExit('route error anchor not found')
-          route_path.write_text(route.replace(old, new, 1))
+          route_path.write_text(route.replace(route_anchor, route_replacement, 1))
 
           tests_path = Path('tests/propertyscope-safe-correlation.test.mjs')
           tests = tests_path.read_text()
-          appendix = r'''
+          if "correlation.requestId mismatch fails closed with exact value-free diagnostic class" not in tests:
+              tests += r'''
 
           test('correlation.requestId mismatch fails closed with exact value-free diagnostic class', () => {
             const caller = generateCallerRequestId();
             const body = buildPlatformBody(protectedRequest('nfe.analysis'), caller);
             const envelope = acceptedEnvelope(body, 30);
             envelope.correlation.requestId = 'RS-another-platform-request-1234567890';
-            assert.throws(
-              () => validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200),
-              (error) => {
-                assert.ok(error instanceof ProtectedResearchError);
-                assert.equal(error.code, 'SAFE_CORRELATION_MISSING_OR_INVALID');
-                assert.equal(error.diagnostic.detail, 'CORRELATION_REQUEST_ID_MISMATCH');
-                assert.equal(error.diagnostic.platformRequestId, 'PRESENT');
-                assert.equal(error.diagnostic.safeCorrelationRequestId, 'MISMATCH');
-                return true;
-              }
-            );
+            assert.throws(() => validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200), (error) => {
+              assert.ok(error instanceof ProtectedResearchError);
+              assert.equal(error.code, 'SAFE_CORRELATION_MISSING_OR_INVALID');
+              assert.equal(error.diagnostic.detail, 'CORRELATION_REQUEST_ID_MISMATCH');
+              assert.equal(error.diagnostic.platformRequestId, 'PRESENT');
+              assert.equal(error.diagnostic.safeCorrelationRequestId, 'MISMATCH');
+              return true;
+            });
           });
 
           test('wrong contractVersion fails closed with exact value-free diagnostic class', () => {
@@ -418,13 +310,7 @@ jobs:
             const body = buildPlatformBody(protectedRequest('nfe.analysis'), caller);
             const envelope = acceptedEnvelope(body, 31);
             envelope.correlation.contractVersion = 'unsupported-safe-contract';
-            assert.throws(
-              () => validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200),
-              (error) => error instanceof ProtectedResearchError
-                && error.code === 'SAFE_CORRELATION_MISSING_OR_INVALID'
-                && error.diagnostic.detail === 'CONTRACT_VERSION_MISMATCH'
-                && error.diagnostic.contractVersion === 'FAIL'
-            );
+            assert.throws(() => validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200), (error) => error instanceof ProtectedResearchError && error.code === 'SAFE_CORRELATION_MISSING_OR_INVALID' && error.diagnostic.detail === 'CONTRACT_VERSION_MISMATCH' && error.diagnostic.contractVersion === 'FAIL');
           });
 
           test('safeResponseGenerated false or absent fails closed with exact diagnostic class', () => {
@@ -434,49 +320,27 @@ jobs:
               const envelope = acceptedEnvelope(body, value === false ? 32 : 33);
               if (value === undefined) delete envelope.correlation.safeResponseGenerated;
               else envelope.correlation.safeResponseGenerated = value;
-              assert.throws(
-                () => validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200),
-                (error) => error instanceof ProtectedResearchError
-                  && error.code === 'SAFE_CORRELATION_MISSING_OR_INVALID'
-                  && error.diagnostic.detail === 'SAFE_RESPONSE_GENERATED_NOT_TRUE'
-                  && error.diagnostic.safeResponseGenerated === 'FAIL'
-              );
+              assert.throws(() => validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200), (error) => error instanceof ProtectedResearchError && error.diagnostic.detail === 'SAFE_RESPONSE_GENERATED_NOT_TRUE' && error.diagnostic.safeResponseGenerated === 'FAIL');
             }
           });
 
           test('missing correlation object and missing correlation.requestId are distinguished without identifier values', () => {
             const caller = generateCallerRequestId();
             const body = buildPlatformBody(protectedRequest('nfe.analysis'), caller);
-
             const missingObject = acceptedEnvelope(body, 34);
             delete missingObject.correlation;
-            assert.throws(
-              () => validatePlatformCorrelation(missingObject, body.caseId, 'nfe.analysis', caller, 200),
-              (error) => error instanceof ProtectedResearchError
-                && error.diagnostic.detail === 'CORRELATION_OBJECT_MISSING'
-                && error.diagnostic.correlationObject === 'ABSENT'
-            );
-
+            assert.throws(() => validatePlatformCorrelation(missingObject, body.caseId, 'nfe.analysis', caller, 200), (error) => error instanceof ProtectedResearchError && error.diagnostic.detail === 'CORRELATION_OBJECT_MISSING' && error.diagnostic.correlationObject === 'ABSENT');
             const missingRequestId = acceptedEnvelope(body, 35);
             delete missingRequestId.correlation.requestId;
-            assert.throws(
-              () => validatePlatformCorrelation(missingRequestId, body.caseId, 'nfe.analysis', caller, 200),
-              (error) => error instanceof ProtectedResearchError
-                && error.diagnostic.detail === 'CORRELATION_REQUEST_ID_MISSING'
-                && error.diagnostic.safeCorrelationRequestId === 'ABSENT'
-            );
+            assert.throws(() => validatePlatformCorrelation(missingRequestId, body.caseId, 'nfe.analysis', caller, 200), (error) => error instanceof ProtectedResearchError && error.diagnostic.detail === 'CORRELATION_REQUEST_ID_MISSING' && error.diagnostic.safeCorrelationRequestId === 'ABSENT');
           });
 
-          test('sanitized diagnostics contain no caller, case, PLATFORM request, bearer, endpoint, or provider payload values', () => {
+          test('sanitized diagnostics contain no identifier, bearer, endpoint, or provider payload values', () => {
             const caller = generateCallerRequestId();
             const body = buildPlatformBody(protectedRequest('nfe.analysis'), caller);
             const envelope = acceptedEnvelope(body, 36, { caseId: 'private-case-value-should-not-appear' });
             let captured;
-            try {
-              validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200);
-            } catch (error) {
-              captured = error;
-            }
+            try { validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200); } catch (error) { captured = error; }
             assert.ok(captured instanceof ProtectedResearchError);
             const serialized = JSON.stringify(captured.diagnostic);
             assert.doesNotMatch(serialized, /property-case-1234567890|private-case-value-should-not-appear|PS-|RS-platform-|synthetic-test-token|synthetic\.platform\.invalid|Protected synthetic NFE answer/);
@@ -484,18 +348,15 @@ jobs:
             assert.equal(captured.diagnostic.topLevelCaseId, 'MISMATCH');
           });
           '''
-          if "correlation.requestId mismatch fails closed with exact value-free diagnostic class" not in tests:
-              tests += appendix
           tests_path.write_text(tests)
 
           check_path = Path('scripts/protected-adapter-check.mjs')
           check = check_path.read_text()
           anchor = "requireText(server, \"correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID')\", 'Malformed safe correlation classification missing.');\n"
-          addition = anchor + "requireText(server, 'CorrelationDiagnostic', 'Sanitized field-level correlation diagnostics missing.');\nrequireText(server, 'CORRELATION_REQUEST_ID_MISMATCH', 'Safe request-ID mismatch diagnostic detail missing.');\nrequireText(route, 'failure.diagnostic', 'Sanitized correlation diagnostic is not preserved through the PropertyScope server route.');\n"
-          if anchor not in check:
-              raise SystemExit('protected adapter check anchor not found')
-          if "failure.diagnostic" not in check:
-              check = check.replace(anchor, addition, 1)
+          if 'Sanitized field-level correlation diagnostics missing.' not in check:
+              if anchor not in check:
+                  raise SystemExit('protected adapter check anchor not found')
+              check = check.replace(anchor, anchor + "requireText(server, 'CorrelationDiagnostic', 'Sanitized field-level correlation diagnostics missing.');\nrequireText(server, 'CORRELATION_REQUEST_ID_MISMATCH', 'Safe request-ID mismatch diagnostic detail missing.');\nrequireText(route, 'failure.diagnostic', 'Sanitized correlation diagnostic is not preserved through the PropertyScope server route.');\n", 1)
           check_path.write_text(check)
           PY
 
@@ -514,7 +375,6 @@ jobs:
 
       - name: Commit bounded diagnostic correction and remove one-time patcher
         working-directory: nfe-site-intelligence-builder2
-        shell: bash
         run: |
           rm .github/workflows/apply-safe-correlation-diagnostics.yml
           git config user.name "darkbishop43-tech"
