@@ -18,8 +18,7 @@ if (pkg.name !== 'propertyscope') {
   process.exit(1);
 }
 
-const allowedRepoFolders = new Set(['nfe-site-intelligence-builder2', 'NFE-PropertyScope']);
-if (!allowedRepoFolders.has(path.basename(cwd))) {
+if (path.basename(cwd) !== 'nfe-site-intelligence-builder2') {
   console.error(`Boundary check failed: unexpected repo folder ${path.basename(cwd)}`);
   process.exit(1);
 }
