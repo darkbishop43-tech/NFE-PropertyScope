@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 
+// Bounded diagnostic checkpoint: value-free correlation classifications only.
 function read(path) { return fs.readFileSync(path, 'utf8'); }
 function requireText(text, value, message) {
   if (!text.includes(value)) throw new Error(message || `Missing required text: ${value}`);
