@@ -21,6 +21,29 @@ export type CorrelationFailureCode =
   | 'MISSING_PLATFORM_REQUEST_ID'
   | 'SAFE_CORRELATION_MISSING_OR_INVALID';
 
+
+export type CorrelationComparison = 'MATCH' | 'MISMATCH' | 'ABSENT';
+export type CorrelationPresence = 'PRESENT' | 'ABSENT';
+export type CorrelationPassFail = 'PASS' | 'FAIL';
+
+export interface CorrelationDiagnostic {
+  classification: CorrelationFailureCode;
+  operation: ProtectedResearchOperation;
+  httpClass: string;
+  topLevelCaseId: CorrelationComparison;
+  safeCorrelationCaseId: CorrelationComparison;
+  module: CorrelationComparison;
+  callerRequestId: CorrelationComparison;
+  platformRequestId: CorrelationPresence;
+  safeCorrelationRequestId: CorrelationComparison;
+  correlationObject: CorrelationPresence;
+  contractVersion: CorrelationPassFail;
+  safeResponseGenerated: CorrelationPassFail;
+  safeFailureStage?: string;
+  safeExecutionReceipt?: string;
+  detail?: 'CORRELATION_OBJECT_MISSING' | 'CONTRACT_VERSION_MISMATCH' | 'SAFE_RESPONSE_GENERATED_NOT_TRUE' | 'CORRELATION_REQUEST_ID_MISSING' | 'CORRELATION_REQUEST_ID_MISMATCH';
+}
+
 export interface PropertyScopeProtectedRequest {
   operation: ProtectedResearchOperation;
   payload: RealEstateNfePayload;
@@ -82,13 +105,21 @@ export class ProtectedResearchError extends Error {
   readonly status: number;
   readonly code: string;
   readonly retryable: boolean;
+  readonly diagnostic?: CorrelationDiagnostic;
 
-  constructor(message: string, status = 502, code = 'PROTECTED_RESEARCH_FAILURE', retryable = false) {
+  constructor(
+    message: string,
+    status = 502,
+    code = 'PROTECTED_RESEARCH_FAILURE',
+    retryable = false,
+    diagnostic?: CorrelationDiagnostic
+  ) {
     super(message);
     this.name = 'ProtectedResearchError';
     this.status = status;
     this.code = code;
     this.retryable = retryable;
+    this.diagnostic = diagnostic;
   }
 }
 
@@ -260,48 +291,133 @@ export function buildPlatformBody(request: PropertyScopeProtectedRequest, caller
   };
 }
 
-function correlationFailure(code: CorrelationFailureCode): never {
-  throw new ProtectedResearchError(
+const SAFE_RECEIPTS = new Set([
+  'PLATFORM_ROUTE_REACHED',
+  'PROTECTED_BEARER_ACCEPTED',
+  'PROTECTED_OPERATION_STARTED',
+  'PROVIDER_INVOCATION_STARTED'
+]);
+const SAFE_FAILURE_STAGES = new Set([
+  'NONE',
+  'PLATFORM_ROUTE_FAILURE',
+  'PROTECTED_AUTHORIZATION_FAILURE',
+  'PROTECTED_SERVICE_FAILURE',
+  'UPSTREAM_PROVIDER_FAILURE',
+  'VALIDATOR_REJECTION'
+]);
+
+function httpClass(status?: number) {
+  if (!status || !Number.isFinite(status)) return 'UNVERIFIABLE';
+  if (status >= 200 && status <= 299) return '2XX';
+  if ([400, 401, 403, 408, 422, 429, 500, 502, 503, 504].includes(status)) return String(status);
+  if (status >= 400 && status <= 499) return 'OTHER_4XX';
+  if (status >= 500 && status <= 599) return 'OTHER_5XX';
+  return 'OTHER';
+}
+
+function comparison(value: unknown, expected: string): CorrelationComparison {
+  if (typeof value !== 'string' || !value) return 'ABSENT';
+  return value === expected ? 'MATCH' : 'MISMATCH';
+}
+
+function buildCorrelationDiagnostic(
+  body: PlatformEnvelope,
+  expectedCaseId: string,
+  operation: ProtectedResearchOperation,
+  expectedCallerRequestId: string,
+  classification: CorrelationFailureCode,
+  status?: number,
+  detail?: CorrelationDiagnostic['detail']
+): CorrelationDiagnostic {
+  const correlation = body.correlation;
+  const topRequestPresent = typeof body.requestId === 'string' && Boolean(body.requestId);
+  const correlationRequestPresent = typeof correlation?.requestId === 'string' && Boolean(correlation.requestId);
+  const safeFailureStage = typeof correlation?.failureStage === 'string' && SAFE_FAILURE_STAGES.has(correlation.failureStage)
+    ? correlation.failureStage
+    : undefined;
+  const safeExecutionReceipt = typeof correlation?.furthestExecutionReceipt === 'string' && SAFE_RECEIPTS.has(correlation.furthestExecutionReceipt)
+    ? correlation.furthestExecutionReceipt
+    : undefined;
+  return {
+    classification,
+    operation,
+    httpClass: httpClass(status),
+    topLevelCaseId: comparison(body.caseId, expectedCaseId),
+    safeCorrelationCaseId: correlation ? comparison(correlation.caseId, expectedCaseId) : 'ABSENT',
+    module: comparison(body.module, operation),
+    callerRequestId: correlation ? comparison(correlation.callerRequestId, expectedCallerRequestId) : 'ABSENT',
+    platformRequestId: topRequestPresent ? 'PRESENT' : 'ABSENT',
+    safeCorrelationRequestId: !correlationRequestPresent
+      ? 'ABSENT'
+      : topRequestPresent && correlation?.requestId === body.requestId
+        ? 'MATCH'
+        : 'MISMATCH',
+    correlationObject: correlation ? 'PRESENT' : 'ABSENT',
+    contractVersion: correlation?.contractVersion === SAFE_CORRELATION_CONTRACT_VERSION ? 'PASS' : 'FAIL',
+    safeResponseGenerated: correlation?.safeResponseGenerated === true ? 'PASS' : 'FAIL',
+    ...(safeFailureStage ? { safeFailureStage } : {}),
+    ...(safeExecutionReceipt ? { safeExecutionReceipt } : {}),
+    ...(detail ? { detail } : {})
+  };
+}
+
+function diagnosticMessage(diagnostic: CorrelationDiagnostic) {
+  return [
     'Protected service response correlation did not match the active PropertyScope case.',
-    502,
-    code,
-    false
-  );
+    `Diagnostic ${diagnostic.classification}`,
+    `case(top=${diagnostic.topLevelCaseId},safe=${diagnostic.safeCorrelationCaseId})`,
+    `module=${diagnostic.module}`,
+    `caller=${diagnostic.callerRequestId}`,
+    `platformRequestId=${diagnostic.platformRequestId}`,
+    `correlationRequestId=${diagnostic.safeCorrelationRequestId}`,
+    `contract=${diagnostic.contractVersion}`,
+    `safeResponseGenerated=${diagnostic.safeResponseGenerated}`,
+    diagnostic.detail ? `detail=${diagnostic.detail}` : ''
+  ].filter(Boolean).join('; ');
+}
+
+function correlationFailure(code: CorrelationFailureCode, diagnostic: CorrelationDiagnostic): never {
+  throw new ProtectedResearchError(diagnosticMessage(diagnostic), 502, code, false, diagnostic);
 }
 
 export function validatePlatformCorrelation(
   body: PlatformEnvelope,
   expectedCaseId: string,
   operation: ProtectedResearchOperation,
-  expectedCallerRequestId: string
+  expectedCallerRequestId: string,
+  status?: number
 ): ProtectedServiceCorrelation {
   if (!body.requestId || typeof body.requestId !== 'string') {
-    correlationFailure('MISSING_PLATFORM_REQUEST_ID');
+    correlationFailure('MISSING_PLATFORM_REQUEST_ID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'MISSING_PLATFORM_REQUEST_ID', status));
   }
   if (body.caseId !== expectedCaseId) {
-    correlationFailure('CASE_ID_MISMATCH');
+    correlationFailure('CASE_ID_MISMATCH', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'CASE_ID_MISMATCH', status));
   }
   if (body.module !== operation) {
-    correlationFailure('MODULE_MISMATCH');
+    correlationFailure('MODULE_MISMATCH', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'MODULE_MISMATCH', status));
   }
-
   const correlation = body.correlation;
-  if (!correlation
-    || correlation.contractVersion !== SAFE_CORRELATION_CONTRACT_VERSION
-    || correlation.safeResponseGenerated !== true) {
-    correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID');
+  if (!correlation) {
+    correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CORRELATION_OBJECT_MISSING'));
+  }
+  if (correlation.contractVersion !== SAFE_CORRELATION_CONTRACT_VERSION) {
+    correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CONTRACT_VERSION_MISMATCH'));
+  }
+  if (correlation.safeResponseGenerated !== true) {
+    correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'SAFE_RESPONSE_GENERATED_NOT_TRUE'));
   }
   if (correlation.caseId !== expectedCaseId) {
-    correlationFailure('CASE_ID_MISMATCH');
+    correlationFailure('CASE_ID_MISMATCH', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'CASE_ID_MISMATCH', status));
   }
-  if (!isValidCallerRequestId(correlation.callerRequestId)
-    || correlation.callerRequestId !== expectedCallerRequestId) {
-    correlationFailure('CALLER_REQUEST_ID_MISMATCH');
+  if (!isValidCallerRequestId(correlation.callerRequestId) || correlation.callerRequestId !== expectedCallerRequestId) {
+    correlationFailure('CALLER_REQUEST_ID_MISMATCH', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'CALLER_REQUEST_ID_MISMATCH', status));
   }
-  if (!correlation.requestId || correlation.requestId !== body.requestId) {
-    correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID');
+  if (!correlation.requestId) {
+    correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CORRELATION_REQUEST_ID_MISSING'));
   }
-
+  if (correlation.requestId !== body.requestId) {
+    correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID', buildCorrelationDiagnostic(body, expectedCaseId, operation, expectedCallerRequestId, 'SAFE_CORRELATION_MISSING_OR_INVALID', status, 'CORRELATION_REQUEST_ID_MISMATCH'));
+  }
   return {
     contractVersion: SAFE_CORRELATION_CONTRACT_VERSION,
     callerRequestId: correlation.callerRequestId,
@@ -470,7 +586,8 @@ export async function executeProtectedResearch(
     data,
     request.payload.realEstateCaseId,
     request.operation,
-    callerRequestId
+    callerRequestId,
+    response.status
   );
 
   if (response.status === 422 && request.operation === 'hdp.discovery') {

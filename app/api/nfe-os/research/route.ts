@@ -54,7 +54,8 @@ export async function POST(request: NextRequest) {
       error: {
         code: failure.code,
         message: failure.message,
-        retryable: failure.retryable
+        retryable: failure.retryable,
+        ...(failure.diagnostic ? { diagnostic: failure.diagnostic } : {})
       }
     }, {
       status: failure.status,

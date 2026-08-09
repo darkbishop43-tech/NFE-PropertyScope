@@ -329,3 +329,62 @@ test('property workflow source preserves project on failure, keeps manual retry,
   assert.match(workspace, /No automatic retry was started\./);
   assert.doesNotMatch(workspace, /setTimeout\([^)]*runAnalysis|while\s*\([^)]*\)\s*\{[^}]*runAnalysis/s);
 });
+
+
+test('correlation.requestId mismatch fails closed with exact value-free diagnostic class', () => {
+  const caller = generateCallerRequestId();
+  const body = buildPlatformBody(protectedRequest('nfe.analysis'), caller);
+  const envelope = acceptedEnvelope(body, 30);
+  envelope.correlation.requestId = 'RS-another-platform-request-1234567890';
+  assert.throws(() => validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200), (error) => {
+    assert.ok(error instanceof ProtectedResearchError);
+    assert.equal(error.code, 'SAFE_CORRELATION_MISSING_OR_INVALID');
+    assert.equal(error.diagnostic.detail, 'CORRELATION_REQUEST_ID_MISMATCH');
+    assert.equal(error.diagnostic.platformRequestId, 'PRESENT');
+    assert.equal(error.diagnostic.safeCorrelationRequestId, 'MISMATCH');
+    return true;
+  });
+});
+
+test('wrong contractVersion fails closed with exact value-free diagnostic class', () => {
+  const caller = generateCallerRequestId();
+  const body = buildPlatformBody(protectedRequest('nfe.analysis'), caller);
+  const envelope = acceptedEnvelope(body, 31);
+  envelope.correlation.contractVersion = 'unsupported-safe-contract';
+  assert.throws(() => validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200), (error) => error instanceof ProtectedResearchError && error.code === 'SAFE_CORRELATION_MISSING_OR_INVALID' && error.diagnostic.detail === 'CONTRACT_VERSION_MISMATCH' && error.diagnostic.contractVersion === 'FAIL');
+});
+
+test('safeResponseGenerated false or absent fails closed with exact diagnostic class', () => {
+  for (const value of [false, undefined]) {
+    const caller = generateCallerRequestId();
+    const body = buildPlatformBody(protectedRequest('nfe.analysis'), caller);
+    const envelope = acceptedEnvelope(body, value === false ? 32 : 33);
+    if (value === undefined) delete envelope.correlation.safeResponseGenerated;
+    else envelope.correlation.safeResponseGenerated = value;
+    assert.throws(() => validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200), (error) => error instanceof ProtectedResearchError && error.diagnostic.detail === 'SAFE_RESPONSE_GENERATED_NOT_TRUE' && error.diagnostic.safeResponseGenerated === 'FAIL');
+  }
+});
+
+test('missing correlation object and missing correlation.requestId are distinguished without identifier values', () => {
+  const caller = generateCallerRequestId();
+  const body = buildPlatformBody(protectedRequest('nfe.analysis'), caller);
+  const missingObject = acceptedEnvelope(body, 34);
+  delete missingObject.correlation;
+  assert.throws(() => validatePlatformCorrelation(missingObject, body.caseId, 'nfe.analysis', caller, 200), (error) => error instanceof ProtectedResearchError && error.diagnostic.detail === 'CORRELATION_OBJECT_MISSING' && error.diagnostic.correlationObject === 'ABSENT');
+  const missingRequestId = acceptedEnvelope(body, 35);
+  delete missingRequestId.correlation.requestId;
+  assert.throws(() => validatePlatformCorrelation(missingRequestId, body.caseId, 'nfe.analysis', caller, 200), (error) => error instanceof ProtectedResearchError && error.diagnostic.detail === 'CORRELATION_REQUEST_ID_MISSING' && error.diagnostic.safeCorrelationRequestId === 'ABSENT');
+});
+
+test('sanitized diagnostics contain no identifier, bearer, endpoint, or provider payload values', () => {
+  const caller = generateCallerRequestId();
+  const body = buildPlatformBody(protectedRequest('nfe.analysis'), caller);
+  const envelope = acceptedEnvelope(body, 36, { caseId: 'private-case-value-should-not-appear' });
+  let captured;
+  try { validatePlatformCorrelation(envelope, body.caseId, 'nfe.analysis', caller, 200); } catch (error) { captured = error; }
+  assert.ok(captured instanceof ProtectedResearchError);
+  const serialized = JSON.stringify(captured.diagnostic);
+  assert.doesNotMatch(serialized, /property-case-1234567890|private-case-value-should-not-appear|PS-|RS-platform-|synthetic-test-token|synthetic\.platform\.invalid|Protected synthetic NFE answer/);
+  assert.match(serialized, /CASE_ID_MISMATCH/);
+  assert.equal(captured.diagnostic.topLevelCaseId, 'MISMATCH');
+});
