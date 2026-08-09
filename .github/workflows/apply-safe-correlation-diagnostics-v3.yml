@@ -1,0 +1,82 @@
+name: Complete bounded safe-correlation diagnostics
+
+on:
+  push:
+    branches:
+      - scope/first-protected-analysis-adapter
+    paths:
+      - '.github/workflows/apply-safe-correlation-diagnostics-v3.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: scope/first-protected-analysis-adapter
+          path: nfe-site-intelligence-builder2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: nfe-site-intelligence-builder2/package-lock.json
+
+      - name: Apply the previously verified value-free source transform
+        working-directory: nfe-site-intelligence-builder2
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('.github/workflows/apply-safe-correlation-diagnostics-v2.yml').read_text().splitlines(True)
+          marker = "cat > /tmp/apply_diag.py <<'PY'"
+          start = next(i for i, line in enumerate(lines) if marker in line) + 1
+          out = []
+          for line in lines[start:]:
+              if line.strip() == 'PY':
+                  break
+              out.append(line[10:] if line.startswith('          ') else line)
+          Path('/tmp/apply_diag.py').write_text(''.join(out))
+          PY
+          python /tmp/apply_diag.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/protected-adapter-check.mjs')
+          text = p.read_text()
+          for code in [
+              'CASE_ID_MISMATCH',
+              'MODULE_MISMATCH',
+              'CALLER_REQUEST_ID_MISMATCH',
+              'MISSING_PLATFORM_REQUEST_ID',
+              'SAFE_CORRELATION_MISSING_OR_INVALID'
+          ]:
+              text = text.replace(f"correlationFailure('{code}')", f"'{code}'")
+          p.write_text(text)
+          PY
+
+      - name: Install dependencies
+        working-directory: nfe-site-intelligence-builder2
+        run: npm ci
+
+      - name: Full bounded proof
+        working-directory: nfe-site-intelligence-builder2
+        run: |
+          npm run boundary-check
+          npm run protected-adapter-check
+          npm run correlation-check
+          npm run typecheck
+          npm run build
+
+      - name: Commit diagnostic source and remove all temporary helpers
+        working-directory: nfe-site-intelligence-builder2
+        run: |
+          rm -f .github/workflows/apply-safe-correlation-diagnostics.yml
+          rm -f .github/workflows/apply-safe-correlation-diagnostics-v2.yml
+          rm -f .github/workflows/apply-safe-correlation-diagnostics-v3.yml
+          git config user.name "darkbishop43-tech"
+          git config user.email "darkbishop43@gmail.com"
+          git add -A
+          git commit -m "Preserve sanitized live correlation mismatch diagnostics"
+          git push origin HEAD:scope/first-protected-analysis-adapter
