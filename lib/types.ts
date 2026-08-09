@@ -40,6 +40,17 @@ export interface ProtectedServiceProvenance {
   };
 }
 
+export interface ProtectedServiceCorrelation {
+  contractVersion: 'nfe-safe-correlation-contract-1.0';
+  callerRequestId: string;
+  requestId: string;
+  caseId: string;
+  furthestExecutionReceipt?: string;
+  safeResponseGenerated: true;
+  failureStage?: string;
+  retryable?: boolean;
+}
+
 export interface PropertyAsset {
   id: string;
   type: 'PHOTO' | 'DOCUMENT' | 'GENERATED_VISUAL';
@@ -133,6 +144,7 @@ export interface NfeAnalysisOutput {
   provenance: 'NFE_OS_ANALYSIS';
   providerMetadata?: NfeProviderMetadata;
   serviceProvenance?: ProtectedServiceProvenance;
+  serviceCorrelation?: ProtectedServiceCorrelation;
   executionStatus?: ProtectedExecutionStatus;
   validationStatus?: ProtectedValidationStatus;
 }
@@ -146,6 +158,7 @@ export interface HdpDiscoveryOutput {
   provenance: 'NFE_OS_ANALYSIS';
   providerMetadata?: NfeProviderMetadata;
   serviceProvenance?: ProtectedServiceProvenance;
+  serviceCorrelation?: ProtectedServiceCorrelation;
   executionStatus?: ProtectedExecutionStatus;
   validationStatus?: ProtectedValidationStatus;
   resultState?: string;
@@ -168,6 +181,7 @@ export interface RrsReviewOutput {
   provenance: 'NFE_OS_ANALYSIS';
   providerMetadata?: NfeProviderMetadata;
   serviceProvenance?: ProtectedServiceProvenance;
+  serviceCorrelation?: ProtectedServiceCorrelation;
   executionStatus?: ProtectedExecutionStatus;
   validationStatus?: ProtectedValidationStatus;
   assessment?: string;
