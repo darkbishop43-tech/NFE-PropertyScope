@@ -1,0 +1,175 @@
+name: SCOPE one-time protected adapter UI patch
+
+on:
+  push:
+    branches:
+      - scope/first-protected-analysis-adapter
+
+permissions:
+  contents: write
+
+jobs:
+  apply-ui-patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: scope/first-protected-analysis-adapter
+          fetch-depth: 0
+
+      - name: Apply bounded PropertyScope UI wiring
+        shell: bash
+        run: |
+          cat > /tmp/scope-page.patch <<'PATCH'
+          diff --git a/app/sites/[projectId]/page.tsx b/app/sites/[projectId]/page.tsx
+          --- a/app/sites/[projectId]/page.tsx
+          +++ b/app/sites/[projectId]/page.tsx
+          @@ -17,6 +17,7 @@ import { MockPropertyDataAdapter } from '@/lib/adapters/property-data';
+           import {
+             buildRealEstateNfePayload,
+             MockNfeOsAdapter,
+          +  RemoteNfeOsAdapter,
+             summarizeIntegrationRun
+           } from '@/lib/adapters/nfe-os';
+          @@ -98,7 +99,9 @@ export default function SiteWorkspacePage() {
+             async function runAnalysis() {
+               if (!project) return;
+               const current = project;
+          -    const adapter = new MockNfeOsAdapter();
+          +    const adapter = process.env.NEXT_PUBLIC_NFE_OS_ADAPTER_MODE === 'remote'
+          +      ? new RemoteNfeOsAdapter()
+          +      : new MockNfeOsAdapter();
+               const startedAt = new Date().toISOString();
+               const runId = crypto.randomUUID();
+               let evidence: EvidenceItem[] = current.evidence;
+          @@ -108,7 +111,8 @@ export default function SiteWorkspacePage() {
+                 status: 'FAILED',
+                 adapterVersion: adapter.adapterVersion,
+                 isMock: adapter.isMock,
+          -      startedAt
+          +      startedAt,
+          +      correlationId: runId
+               };
+          @@ -121,7 +125,7 @@ export default function SiteWorkspacePage() {
+                   );
+                 }
+          -      const payload = buildRealEstateNfePayload(current, evidence);
+          +      const payload = buildRealEstateNfePayload(current, evidence, runId);
+                 const nfeAnalysis = await adapter.runNfeAnalysis(payload);
+          @@ -138,6 +142,27 @@ export default function SiteWorkspacePage() {
+                   hdpAnalysis
+                 };
+          +      if (hdpAnalysis.rejected || hdpAnalysis.validationStatus === 'rejected') {
+          +        const rejectedRun: NfeOsIntegrationRun = {
+          +          ...partialRun,
+          +          status: 'PARTIAL',
+          +          completedAt: new Date().toISOString(),
+          +          errorMessage: hdpAnalysis.rejectionReason || 'HDP output was rejected by the authoritative validator.'
+          +        };
+          +        persist({
+          +          ...current,
+          +          evidence,
+          +          findings: nfeAnalysis.findings,
+          +          analysisCompleted: true,
+          +          nfeOsRuns: [rejectedRun, ...(current.nfeOsRuns ?? [])],
+          +          status: 'HDP rejected — NFE preserved; RRS not run',
+          +          updatedAt: new Date().toISOString()
+          +        });
+          +        setMessage('HDP was rejected by the authoritative validator. The rejected output was preserved as rejected, RRS was not run, and no automatic retry was started.');
+          +        setTab('Site Analysis');
+          +        return;
+          +      }
+          +
+                 const rrsReview = await adapter.runRrs({ payload, nfeAnalysis, hdpAnalysis });
+          @@ -148,10 +173,12 @@ export default function SiteWorkspacePage() {
+                   overallSummary: summarizeIntegrationRun({ nfeAnalysis, hdpAnalysis, rrsReview })
+                 };
+          -      const scenarios: DevelopmentScenario[] = demoProjects[0].scenarios.map((scenario) => ({
+          -        ...scenario,
+          -        id: `${scenario.id}-${current.id.slice(0, 6)}`
+          -      }));
+          +      const scenarios: DevelopmentScenario[] = adapter.isMock
+          +        ? demoProjects[0].scenarios.map((scenario) => ({
+          +            ...scenario,
+          +            id: `${scenario.id}-${current.id.slice(0, 6)}`
+          +          }))
+          +        : current.scenarios;
+          @@ -164,7 +191,9 @@ export default function SiteWorkspacePage() {
+                   status: 'Preliminary NFE / HDP / RRS analysis ready',
+                   updatedAt: new Date().toISOString()
+                 });
+          -      setMessage(`DEVELOPMENT / MOCK NFE, HDP, and RRS completed through ${adapter.adapterVersion}. Outputs are separated and stored with provenance.`);
+          +      setMessage(adapter.isMock
+          +        ? `DEVELOPMENT / MOCK NFE, HDP, and RRS completed through ${adapter.adapterVersion}. Outputs are separated and stored with provenance.`
+          +        : `PRIVATE LIVE RESEARCH NFE, HDP, and RRS completed through ${adapter.adapterVersion}. Outputs remain separated with same-property correlation and safe provenance.`);
+                 setTab('Site Analysis');
+          @@ -302,6 +331,7 @@ function EvidenceView({ project }: { project: SiteProject }) {
+           function AnalysisView({ project, onRun, working }: { project: SiteProject; onRun: () => void; working: boolean }) {
+             const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('NFE Analysis');
+             const latestRun = project.nfeOsRuns?.[0];
+          +  const liveMode = process.env.NEXT_PUBLIC_NFE_OS_ADAPTER_MODE === 'remote';
+             const nfeFindings = latestRun?.nfeAnalysis?.findings ?? project.findings;
+          @@ -313,14 +343,22 @@ function AnalysisView({ project, onRun, working }: { project: SiteProject; onRun
+                     <h2>NFE, HDP, and RRS remain separate.</h2>
+                     <p>Builder #2 uses only its local adapter contract. The protected NFE-OS Platform, browser archive, DOM, prompts, lineage, and localStorage are not imported or modified.</p>
+                   </div>
+          -        <button className="button button-primary" onClick={onRun} disabled={working}>{latestRun ? 'Run Again Manually' : 'Run DEVELOPMENT / MOCK Analysis'}</button>
+          +        <button className="button button-primary" onClick={onRun} disabled={working}>{latestRun ? 'Run Again Manually' : liveMode ? 'Run NFE-OS Analysis' : 'Run DEVELOPMENT / MOCK Analysis'}</button>
+                 </div>
+                 <div className="analysis-governance-banner">
+          -        <strong>{latestRun?.isMock !== false ? 'DEVELOPMENT / MOCK' : 'NFE-OS SERVICE'}</strong>
+          +        <strong>{latestRun ? (latestRun.isMock ? 'DEVELOPMENT / MOCK' : 'PRIVATE LIVE RESEARCH') : (liveMode ? 'PRIVATE LIVE RESEARCH READY' : 'DEVELOPMENT / MOCK')}</strong>
+                   <span>Structured analysis and decision support only. Further verification required. Final decisions remain human-controlled.</span>
+                 </div>
+          +      {latestRun && (
+          +        <div className="source-row">
+          +          <span>Property case: {latestRun.realEstateCaseId} · Run correlation: {latestRun.correlationId || latestRun.id}</span>
+          +          <span>NFE {latestRun.nfeRequestId || '—'} · HDP {latestRun.hdpRequestId || '—'} · RRS {latestRun.rrsRequestId || '—'}</span>
+          +          <span>Service: {latestRun.providerMetadata?.service || latestRun.providerMetadata?.provider || (latestRun.isMock ? 'DEVELOPMENT / MOCK' : 'Protected NFE-OS service')}</span>
+          +        </div>
+          +      )}
+          @@ -328,7 +366,12 @@ function AnalysisView({ project, onRun, working }: { project: SiteProject; onRun
+                 </div>
+                 {analysisTab === 'NFE Analysis' && (
+          -        nfeFindings.length === 0 ? <Empty title="NFE Analysis has not been run" text="Use the explicit Run NFE-OS Analysis control. No model calls occur automatically on page load." /> : (
+          +        latestRun?.nfeAnalysis?.answer ? (
+          +          <article className="analysis-section">
+          +            <div className="analysis-section-title"><span>Protected NFE Analysis</span><small>{latestRun.nfeRequestId}</small></div>
+          +            <div className="finding-row"><div className="importance-dot importance-medium" /><div><p>{latestRun.nfeAnalysis.answer}</p><small>Producer: NFE Analysis · Validation {latestRun.nfeAnalysis.validationStatus || 'unknown'} · Further property verification required</small></div></div>
+          +          </article>
+          +        ) : nfeFindings.length === 0 ? <Empty title="NFE Analysis has not been run" text="Use the explicit Run NFE-OS Analysis control. No model calls occur automatically on page load." /> : (
+          @@ -350,9 +393,11 @@ function AnalysisView({ project, onRun, working }: { project: SiteProject; onRun
+                 )}
+                 {analysisTab === 'HDP Discovery' && (
+          -        latestRun?.hdpAnalysis ? (
+          -          <SystemOutput title="HDP Discovery" requestId={latestRun.hdpRequestId} generatedAt={latestRun.hdpAnalysis.generatedAt} items={latestRun.hdpAnalysis.discoveries} />
+          -        ) : <Empty title="HDP Discovery not available" text="HDP remains a distinct output. Run the explicit analysis workflow to populate the current DEVELOPMENT / MOCK adapter result." />
+          +        latestRun?.hdpAnalysis?.rejected ? (
+          +          <div className="analysis-error-state"><strong>HDP validator rejected this output</strong><p>{latestRun.hdpAnalysis.rejectionReason || 'The generated HDP reasoning did not satisfy the authoritative validation contract.'}</p><small>Request {latestRun.hdpRequestId} · Result remains rejected · RRS was not run from this rejected material.</small></div>
+          +        ) : latestRun?.hdpAnalysis ? (
+          +          <SystemOutput title={`HDP Discovery${latestRun.hdpAnalysis.resultState ? ` — ${latestRun.hdpAnalysis.resultState}` : ''}`} requestId={latestRun.hdpRequestId} generatedAt={latestRun.hdpAnalysis.generatedAt} items={latestRun.hdpAnalysis.discoveries} />
+          +        ) : <Empty title="HDP Discovery not available" text="HDP remains a distinct output. Run the explicit analysis workflow to populate it." />
+                 )}
+          @@ -376,7 +421,7 @@ function AnalysisView({ project, onRun, working }: { project: SiteProject; onRun
+                 )}
+                 {latestRun?.errorMessage && (
+          -        <div className="analysis-error-state"><strong>NFE-OS analysis unavailable</strong><p>{latestRun.errorMessage}</p><small>Property data was preserved. No automatic retry was started.</small></div>
+          +        <div className="analysis-error-state"><strong>{latestRun.hdpAnalysis?.rejected ? 'HDP rejected — partial run preserved' : 'NFE-OS analysis unavailable'}</strong><p>{latestRun.errorMessage}</p><small>Property data and valid prior module results were preserved. No automatic retry was started.</small></div>
+                 )}
+               </section>
+          PATCH
+          git apply --check /tmp/scope-page.patch
+          git apply /tmp/scope-page.patch
+          rm .github/workflows/scope-one-time-ui-patch.yml
+
+      - name: Verify and commit exact page patch
+        shell: bash
+        run: |
+          node scripts/assert-isolated-repo.mjs
+          node scripts/protected-adapter-check.mjs
+          git config user.name "SCOPE Builder 02"
+          git config user.email "scope-builder-02@users.noreply.github.com"
+          git add 'app/sites/[projectId]/page.tsx' .github/workflows/scope-one-time-ui-patch.yml
+          git commit -m "Complete protected analysis UI wiring"
+          git push origin HEAD:scope/first-protected-analysis-adapter

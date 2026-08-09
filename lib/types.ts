@@ -18,6 +18,28 @@ export type ProvenanceType =
   | 'NFE_OS_ANALYSIS'
   | 'PROFESSIONALLY_VERIFIED';
 
+export type ProtectedExecutionStatus = 'accepted' | 'accepted_with_qualification' | 'rejected' | 'failed';
+export type ProtectedValidationStatus = 'passed' | 'rejected' | 'not_completed';
+
+export interface ProtectedServiceProvenance {
+  requestId?: string;
+  caseId?: string;
+  module?: string;
+  executedAt?: string;
+  service?: string;
+  serviceVersion?: string;
+  platformVersion?: string;
+  build?: string;
+  componentVersion?: string;
+  promptVersion?: string;
+  contractVersion?: string;
+  provider?: {
+    provider?: string;
+    model?: string;
+    finishReason?: string;
+  };
+}
+
 export interface PropertyAsset {
   id: string;
   type: 'PHOTO' | 'DOCUMENT' | 'GENERATED_VISUAL';
@@ -91,28 +113,53 @@ export interface NfeProviderMetadata {
   provider?: string;
   model?: string;
   version?: string;
+  service?: string;
+  serviceVersion?: string;
+  platformVersion?: string;
+  build?: string;
+  componentVersion?: string;
+  promptVersion?: string;
+  contractVersion?: string;
+  finishReason?: string;
 }
 
 export interface NfeAnalysisOutput {
   requestId: string;
+  caseId?: string;
   findings: AnalysisFinding[];
+  answer?: string;
   confidence: Confidence;
   generatedAt: string;
   provenance: 'NFE_OS_ANALYSIS';
   providerMetadata?: NfeProviderMetadata;
+  serviceProvenance?: ProtectedServiceProvenance;
+  executionStatus?: ProtectedExecutionStatus;
+  validationStatus?: ProtectedValidationStatus;
 }
 
 export interface HdpDiscoveryOutput {
   requestId: string;
+  caseId?: string;
   discoveries: string[];
   confidence: Confidence;
   generatedAt: string;
   provenance: 'NFE_OS_ANALYSIS';
   providerMetadata?: NfeProviderMetadata;
+  serviceProvenance?: ProtectedServiceProvenance;
+  executionStatus?: ProtectedExecutionStatus;
+  validationStatus?: ProtectedValidationStatus;
+  resultState?: string;
+  discoveryClassification?: string | null;
+  mechanismOrigin?: string | null;
+  conclusion?: string;
+  rejected?: boolean;
+  rejectionCode?: string;
+  rejectionReason?: string;
 }
 
 export interface RrsReviewOutput {
   requestId: string;
+  caseId?: string;
   verdict: string;
   strengths: string[];
   concerns: string[];
@@ -120,11 +167,19 @@ export interface RrsReviewOutput {
   generatedAt: string;
   provenance: 'NFE_OS_ANALYSIS';
   providerMetadata?: NfeProviderMetadata;
+  serviceProvenance?: ProtectedServiceProvenance;
+  executionStatus?: ProtectedExecutionStatus;
+  validationStatus?: ProtectedValidationStatus;
+  assessment?: string;
+  crossSystemAssessment?: string;
+  hdpAssessment?: string;
+  humanDecision?: string;
 }
 
 export interface NfeOsIntegrationRun {
   id: string;
   realEstateCaseId: string;
+  correlationId?: string;
   status: 'COMPLETED' | 'PARTIAL' | 'FAILED';
   adapterVersion: string;
   isMock: boolean;
