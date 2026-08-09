@@ -1,13 +1,25 @@
+import { randomUUID } from 'node:crypto';
 import type {
   HdpDiscoveryOutput,
   NfeAnalysisOutput,
   NfeProviderMetadata,
+  ProtectedServiceCorrelation,
   ProtectedServiceProvenance,
   RrsReviewOutput
 } from '../types';
 import type { RealEstateNfePayload } from '../adapters/nfe-os';
 
 export type ProtectedResearchOperation = 'nfe.analysis' | 'hdp.discovery' | 'rrs.review';
+export const SAFE_CORRELATION_CONTRACT_VERSION = 'nfe-safe-correlation-contract-1.0' as const;
+
+const CALLER_REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{18,78}[A-Za-z0-9]$/;
+
+export type CorrelationFailureCode =
+  | 'CASE_ID_MISMATCH'
+  | 'MODULE_MISMATCH'
+  | 'CALLER_REQUEST_ID_MISMATCH'
+  | 'MISSING_PLATFORM_REQUEST_ID'
+  | 'SAFE_CORRELATION_MISSING_OR_INVALID';
 
 export interface PropertyScopeProtectedRequest {
   operation: ProtectedResearchOperation;
@@ -35,6 +47,17 @@ interface PlatformProvenance {
   };
 }
 
+interface PlatformCorrelationEnvelope {
+  contractVersion?: string;
+  callerRequestId?: string;
+  requestId?: string;
+  caseId?: string | null;
+  furthestExecutionReceipt?: string;
+  safeResponseGenerated?: boolean;
+  failureStage?: string;
+  retryable?: boolean;
+}
+
 interface PlatformEnvelope {
   requestId?: string;
   caseId?: string;
@@ -51,6 +74,7 @@ interface PlatformEnvelope {
     retryable?: boolean;
     retryAfterSeconds?: number;
   };
+  correlation?: PlatformCorrelationEnvelope;
   provenance?: PlatformProvenance;
 }
 
@@ -141,10 +165,15 @@ function safeProvenance(provenance?: PlatformProvenance): ProtectedServiceProven
   };
 }
 
-function requestIdFor(payload: RealEstateNfePayload, operation: ProtectedResearchOperation) {
-  const prefix = payload.metadata.runCorrelationId || crypto.randomUUID();
-  const suffix = operation === 'nfe.analysis' ? 'nfe' : operation === 'hdp.discovery' ? 'hdp' : 'rrs';
-  return `PS-${prefix}-${suffix}-${crypto.randomUUID()}`;
+export function isValidCallerRequestId(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length >= 20
+    && value.length <= 80
+    && CALLER_REQUEST_ID_PATTERN.test(value);
+}
+
+export function generateCallerRequestId() {
+  return `PS-${randomUUID()}`;
 }
 
 function nfeVisibleText(output?: NfeAnalysisOutput) {
@@ -166,15 +195,22 @@ function evidenceText(payload: RealEstateNfePayload) {
   ).join('\n');
 }
 
-function buildPlatformBody(request: PropertyScopeProtectedRequest) {
+export function buildPlatformBody(request: PropertyScopeProtectedRequest, callerRequestId: string) {
   const caseId = request.payload.realEstateCaseId;
-  const requestId = requestIdFor(request.payload, request.operation);
+  if (!isValidCallerRequestId(callerRequestId)) {
+    throw new ProtectedResearchError('PropertyScope caller request identity is invalid.', 500, 'INVALID_CALLER_REQUEST_ID');
+  }
+
+  const correlation = {
+    contractVersion: SAFE_CORRELATION_CONTRACT_VERSION,
+    callerRequestId
+  };
 
   if (request.operation === 'nfe.analysis') {
     return {
-      operation: 'nfe.analysis',
-      requestId,
+      operation: 'nfe.analysis' as const,
       caseId,
+      correlation,
       input: { source: request.payload.sourceMaterial },
       options: { runwayMode: 'standard' }
     };
@@ -186,9 +222,9 @@ function buildPlatformBody(request: PropertyScopeProtectedRequest) {
       throw new ProtectedResearchError('Accepted NFE visible output is required before HDP.', 409, 'NFE_REQUIRED');
     }
     return {
-      operation: 'hdp.discovery',
-      requestId,
+      operation: 'hdp.discovery' as const,
       caseId,
+      correlation,
       input: {
         source: request.payload.sourceMaterial,
         existingAnswer
@@ -204,9 +240,9 @@ function buildPlatformBody(request: PropertyScopeProtectedRequest) {
   }
 
   return {
-    operation: 'rrs.review',
-    requestId,
+    operation: 'rrs.review' as const,
     caseId,
+    correlation,
     input: {
       material: `NFE Analysis:\n${nfeOutput}\n\nHDP Discovery:\n${hdpOutput}`,
       source: request.payload.sourceMaterial,
@@ -224,14 +260,58 @@ function buildPlatformBody(request: PropertyScopeProtectedRequest) {
   };
 }
 
-function validatePlatformCorrelation(body: PlatformEnvelope, expectedCaseId: string, operation: ProtectedResearchOperation) {
-  if (!body.requestId || body.caseId !== expectedCaseId || body.module !== operation) {
-    throw new ProtectedResearchError(
-      'Protected service response correlation did not match the active PropertyScope case.',
-      502,
-      'PLATFORM_CORRELATION_MISMATCH'
-    );
+function correlationFailure(code: CorrelationFailureCode): never {
+  throw new ProtectedResearchError(
+    'Protected service response correlation did not match the active PropertyScope case.',
+    502,
+    code,
+    false
+  );
+}
+
+export function validatePlatformCorrelation(
+  body: PlatformEnvelope,
+  expectedCaseId: string,
+  operation: ProtectedResearchOperation,
+  expectedCallerRequestId: string
+): ProtectedServiceCorrelation {
+  if (!body.requestId || typeof body.requestId !== 'string') {
+    correlationFailure('MISSING_PLATFORM_REQUEST_ID');
   }
+  if (body.caseId !== expectedCaseId) {
+    correlationFailure('CASE_ID_MISMATCH');
+  }
+  if (body.module !== operation) {
+    correlationFailure('MODULE_MISMATCH');
+  }
+
+  const correlation = body.correlation;
+  if (!correlation
+    || correlation.contractVersion !== SAFE_CORRELATION_CONTRACT_VERSION
+    || correlation.safeResponseGenerated !== true) {
+    correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID');
+  }
+  if (correlation.caseId !== expectedCaseId) {
+    correlationFailure('CASE_ID_MISMATCH');
+  }
+  if (!isValidCallerRequestId(correlation.callerRequestId)
+    || correlation.callerRequestId !== expectedCallerRequestId) {
+    correlationFailure('CALLER_REQUEST_ID_MISMATCH');
+  }
+  if (!correlation.requestId || correlation.requestId !== body.requestId) {
+    correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID');
+  }
+
+  return {
+    contractVersion: SAFE_CORRELATION_CONTRACT_VERSION,
+    callerRequestId: correlation.callerRequestId,
+    requestId: body.requestId,
+    caseId: expectedCaseId,
+    furthestExecutionReceipt: correlation.furthestExecutionReceipt,
+    safeResponseGenerated: true,
+    failureStage: correlation.failureStage,
+    retryable: correlation.retryable
+  };
 }
 
 function stringsFromSections(value: unknown): string[] {
@@ -245,7 +325,7 @@ function stringsFromSections(value: unknown): string[] {
   });
 }
 
-function mapNfe(body: PlatformEnvelope): NfeAnalysisOutput {
+function mapNfe(body: PlatformEnvelope, serviceCorrelation: ProtectedServiceCorrelation): NfeAnalysisOutput {
   const answer = typeof body.result?.answer === 'string' ? body.result.answer.trim() : '';
   if (!answer || body.validationStatus !== 'passed') {
     throw new ProtectedResearchError('Protected NFE did not return an accepted visible analysis.', 502, 'INVALID_NFE_RESULT');
@@ -260,12 +340,13 @@ function mapNfe(body: PlatformEnvelope): NfeAnalysisOutput {
     provenance: 'NFE_OS_ANALYSIS',
     providerMetadata: providerMetadata(body.provenance),
     serviceProvenance: safeProvenance(body.provenance),
+    serviceCorrelation,
     executionStatus: body.executionStatus,
     validationStatus: body.validationStatus
   };
 }
 
-function mapHdp(body: PlatformEnvelope): HdpDiscoveryOutput {
+function mapHdp(body: PlatformEnvelope, serviceCorrelation: ProtectedServiceCorrelation): HdpDiscoveryOutput {
   if (body.executionStatus === 'rejected' && body.validationStatus === 'rejected' && body.outcome === 'validator_rejected' && body.result === null) {
     return {
       requestId: body.requestId!,
@@ -276,6 +357,7 @@ function mapHdp(body: PlatformEnvelope): HdpDiscoveryOutput {
       provenance: 'NFE_OS_ANALYSIS',
       providerMetadata: providerMetadata(body.provenance),
       serviceProvenance: safeProvenance(body.provenance),
+      serviceCorrelation,
       executionStatus: 'rejected',
       validationStatus: 'rejected',
       rejected: true,
@@ -303,6 +385,7 @@ function mapHdp(body: PlatformEnvelope): HdpDiscoveryOutput {
     provenance: 'NFE_OS_ANALYSIS',
     providerMetadata: providerMetadata(body.provenance),
     serviceProvenance: safeProvenance(body.provenance),
+    serviceCorrelation,
     executionStatus: body.executionStatus,
     validationStatus: body.validationStatus,
     resultState,
@@ -317,7 +400,7 @@ function readString(result: Record<string, unknown>, key: string) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function mapRrs(body: PlatformEnvelope): RrsReviewOutput {
+function mapRrs(body: PlatformEnvelope, serviceCorrelation: ProtectedServiceCorrelation): RrsReviewOutput {
   if (!body.result || body.validationStatus !== 'passed') {
     throw new ProtectedResearchError('Protected RRS did not return an accepted review.', 502, 'INVALID_RRS_RESULT');
   }
@@ -348,6 +431,7 @@ function mapRrs(body: PlatformEnvelope): RrsReviewOutput {
     provenance: 'NFE_OS_ANALYSIS',
     providerMetadata: providerMetadata(body.provenance),
     serviceProvenance: safeProvenance(body.provenance),
+    serviceCorrelation,
     executionStatus: body.executionStatus,
     validationStatus: body.validationStatus
   };
@@ -359,7 +443,8 @@ export async function executeProtectedResearch(
 ): Promise<{ status: number; body: NfeAnalysisOutput | HdpDiscoveryOutput | RrsReviewOutput }> {
   assertCaseContinuity(request);
   const { serviceUrl, token } = requireConfiguredService();
-  const platformBody = buildPlatformBody(request);
+  const callerRequestId = generateCallerRequestId();
+  const platformBody = buildPlatformBody(request, callerRequestId);
 
   let response: Response;
   try {
@@ -381,10 +466,15 @@ export async function executeProtectedResearch(
     throw new ProtectedResearchError('Protected research service returned no usable response.', 502, 'INVALID_PROTECTED_SERVICE_RESPONSE', response.status >= 500);
   }
 
-  validatePlatformCorrelation(data, request.payload.realEstateCaseId, request.operation);
+  const serviceCorrelation = validatePlatformCorrelation(
+    data,
+    request.payload.realEstateCaseId,
+    request.operation,
+    callerRequestId
+  );
 
   if (response.status === 422 && request.operation === 'hdp.discovery') {
-    return { status: 422, body: mapHdp(data) };
+    return { status: 422, body: mapHdp(data, serviceCorrelation) };
   }
 
   if (!response.ok) {
@@ -396,7 +486,7 @@ export async function executeProtectedResearch(
     );
   }
 
-  if (request.operation === 'nfe.analysis') return { status: 200, body: mapNfe(data) };
-  if (request.operation === 'hdp.discovery') return { status: 200, body: mapHdp(data) };
-  return { status: 200, body: mapRrs(data) };
+  if (request.operation === 'nfe.analysis') return { status: 200, body: mapNfe(data, serviceCorrelation) };
+  if (request.operation === 'hdp.discovery') return { status: 200, body: mapHdp(data, serviceCorrelation) };
+  return { status: 200, body: mapRrs(data, serviceCorrelation) };
 }
