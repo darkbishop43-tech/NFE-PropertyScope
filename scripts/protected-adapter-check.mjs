@@ -14,6 +14,7 @@ const route = read('app/api/nfe-os/research/route.ts');
 const workspace = read('app/sites/[projectId]/page.tsx');
 const intake = read('app/sites/new/page.tsx');
 const env = read('.env.example');
+const tests = read('tests/propertyscope-safe-correlation.test.mjs');
 
 for (const op of ['nfe.analysis', 'hdp.discovery', 'rrs.review']) {
   requireText(adapter + server, op, `Protected operation missing: ${op}`);
@@ -21,8 +22,14 @@ for (const op of ['nfe.analysis', 'hdp.discovery', 'rrs.review']) {
 requireText(adapter, '/api/nfe-os/research', 'Browser adapter must use PropertyScope trusted server route.');
 requireText(server, 'NFE_RESEARCH_SERVICE_TOKEN', 'Accepted bearer family is not wired server-side.');
 requireText(server, 'NFE_RESEARCH_SERVICE_URL', 'Approved protected service URL is not wired server-side.');
-requireText(server, 'CASE_CORRELATION_MISMATCH', 'Case-correlation fail-closed check missing.');
-requireText(server, 'PLATFORM_CORRELATION_MISMATCH', 'PLATFORM response correlation check missing.');
+requireText(server, 'CASE_CORRELATION_MISMATCH', 'Pre-downstream same-case fail-closed check missing.');
+requireText(server, "SAFE_CORRELATION_CONTRACT_VERSION = 'nfe-safe-correlation-contract-1.0'", 'Safe Request Correlation contract missing.');
+requireText(server, 'callerRequestId', 'Caller request identity is not wired.');
+requireText(server, "correlationFailure('CASE_ID_MISMATCH')", 'Returned case mismatch classification missing.');
+requireText(server, "correlationFailure('MODULE_MISMATCH')", 'Returned operation/module mismatch classification missing.');
+requireText(server, "correlationFailure('CALLER_REQUEST_ID_MISMATCH')", 'Returned caller request mismatch classification missing.');
+requireText(server, "correlationFailure('MISSING_PLATFORM_REQUEST_ID')", 'Missing PLATFORM request identity classification missing.');
+requireText(server, "correlationFailure('SAFE_CORRELATION_MISSING_OR_INVALID')", 'Malformed safe correlation classification missing.');
 requireText(server, "VERCEL_ENV === 'production'", 'Bounded release must fail closed in Production.');
 requireText(workspace, 'Run NFE-OS Analysis', 'Explicit human analysis action missing.');
 requireText(workspace, 'No automatic retry was started.', 'Manual-retry-only failure language missing.');
@@ -30,6 +37,8 @@ requireText(workspace, 'HDP validator rejected this output', 'Visible HDP reject
 requireText(workspace, "adapter.isMock\n        ? demoProjects", 'Live runs must not fabricate mock scenarios.');
 requireText(route, 'CROSS_ORIGIN_BLOCKED', 'Same-origin server-route guard missing.');
 requireText(intake, 'image/', 'Existing photo intake no longer appears present.');
+requireText(tests, 'caller and PLATFORM request IDs differ', 'Distinct caller/PLATFORM request identity proof missing.');
+requireText(tests, 'valid correlation permits a deterministic NFE to HDP to RRS same-property chain', 'Same-case deterministic chain proof missing.');
 
 for (const legacy of ['/nfe/analyze', '/hdp/run', '/rrs/review']) forbid(adapter + server, legacy, `Historical hypothetical endpoint remained active: ${legacy}`);
 for (const forbidden of ['NFE1.0-sandbox', 'nfe-os-unified-workspace', 'app.js']) forbid(adapter + server + route, forbidden, `Protected implementation coupling found: ${forbidden}`);
@@ -37,8 +46,10 @@ forbid(adapter + workspace, 'NFE_RESEARCH_SERVICE_TOKEN', 'Protected bearer must
 forbid(env, 'NEXT_PUBLIC_NFE_RESEARCH_SERVICE_TOKEN', 'Protected bearer must never use NEXT_PUBLIC_.');
 forbid(intake.toLowerCase(), '.pdf', 'PDF upload must not be added in this bounded release.');
 forbid(intake.toLowerCase(), '.docx', 'DOCX upload must not be added in this bounded release.');
+forbid(server, 'requestIdFor(', 'Legacy caller-generated top-level PLATFORM request identity must not remain active.');
 
 console.log('PASS — PropertyScope first protected analysis adapter boundary is server-only and contract-aligned.');
-console.log('PASS — NFE/HDP/RRS operations remain separated and same-property correlation fails closed.');
+console.log('PASS — Safe Request Correlation preserves realEstateCaseId, distinct caller identity, PLATFORM request identity, and top-level module identity.');
+console.log('PASS — NFE/HDP/RRS operations remain separated and correlation mismatches fail closed with sanitized classifications.');
 console.log('PASS — existing photo intake is preserved and PDF/DOCX upload was not added.');
 console.log('PASS — no PLATFORM or Unified Workspace source coupling is present.');
