@@ -1,0 +1,29 @@
+name: Restore generated build artifacts
+
+on:
+  push:
+    branches:
+      - scope/first-protected-analysis-adapter
+    paths:
+      - '.github/workflows/restore-generated-build-artifacts.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: scope/first-protected-analysis-adapter
+          fetch-depth: 0
+      - name: Restore generated files to released diagnostic baseline
+        run: |
+          git checkout 6df50973dfbc8f2d7a693197d4348bddf8146211 -- next-env.d.ts tsconfig.tsbuildinfo
+          rm .github/workflows/restore-generated-build-artifacts.yml
+          git config user.name "darkbishop43-tech"
+          git config user.email "darkbishop43@gmail.com"
+          git add next-env.d.ts tsconfig.tsbuildinfo .github/workflows/restore-generated-build-artifacts.yml
+          git commit -m "Restore generated build artifacts after diagnostic proof"
+          git push origin HEAD:scope/first-protected-analysis-adapter
