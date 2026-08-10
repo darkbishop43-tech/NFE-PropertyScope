@@ -28,7 +28,9 @@ jobs:
 
       - name: Apply bounded PropertyScope-only patch
         working-directory: nfe-site-intelligence-builder2
-        run: python3 scripts/hdp-rejection-observability-patch.py
+        run: |
+          python3 scripts/hdp-rejection-observability-patch.py
+          python3 scripts/hdp-rejection-observability-postfix.py
 
       - name: Install dependencies
         working-directory: nfe-site-intelligence-builder2
