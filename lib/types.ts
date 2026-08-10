@@ -149,6 +149,16 @@ export interface NfeAnalysisOutput {
   validationStatus?: ProtectedValidationStatus;
 }
 
+export interface HdpRejectionDiagnostics {
+  rejectionCode?: 'CONTENT_INTEGRITY' | 'HDP_UNSUPPORTED_CAPABILITY' | 'HDP_SOLUTION_RESTRAINT' | 'HDP_RESULT_STATE_CONTRACT' | 'VALIDATION_REJECTED';
+  firstFailureCode?: 'CONTENT_INTEGRITY' | 'HDP_UNSUPPORTED_CAPABILITY' | 'HDP_SOLUTION_RESTRAINT' | 'HDP_RESULT_STATE_CONTRACT' | 'VALIDATION_REJECTED';
+  firstFinishReason?: 'STOP' | 'MAX_TOKENS' | 'SAFETY' | 'RECITATION' | 'NOT_SUPPLIED' | 'OTHER';
+  correctionEligible?: boolean;
+  correctionAttempted?: boolean;
+  correctionIneligibilityReason?: 'NONE' | 'MAX_TOKENS' | 'CONTENT_INTEGRITY';
+  correctionResult?: 'REJECTED' | 'NOT_ATTEMPTED';
+}
+
 export interface HdpDiscoveryOutput {
   requestId: string;
   caseId?: string;
@@ -168,6 +178,7 @@ export interface HdpDiscoveryOutput {
   rejected?: boolean;
   rejectionCode?: string;
   rejectionReason?: string;
+  rejectionDiagnostics?: HdpRejectionDiagnostics;
 }
 
 export interface RrsReviewOutput {

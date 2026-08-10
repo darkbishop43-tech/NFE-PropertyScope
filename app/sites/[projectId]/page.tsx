@@ -334,6 +334,15 @@ function AnalysisView({ project, onRun, working }: { project: SiteProject; onRun
   const liveMode = process.env.NEXT_PUBLIC_NFE_OS_ADAPTER_MODE === 'remote';
   const nfeFindings = latestRun?.nfeAnalysis?.findings ?? project.findings;
   const groups = Object.entries(findingLabels) as Array<[AnalysisFinding['category'], string]>;
+  const rejectionDiagnostics = latestRun?.hdpAnalysis?.rejectionDiagnostics;
+  const rejectionCategory = (() => {
+    const code = rejectionDiagnostics?.rejectionCode || rejectionDiagnostics?.firstFailureCode;
+    if (code === 'CONTENT_INTEGRITY') return 'CONTENT INTEGRITY';
+    if (code === 'HDP_UNSUPPORTED_CAPABILITY') return 'UNSUPPORTED CAPABILITY';
+    if (code === 'HDP_SOLUTION_RESTRAINT') return 'SOLUTION RESTRAINT';
+    if (code === 'HDP_RESULT_STATE_CONTRACT') return 'RESULT-STATE CONTRACT';
+    return null;
+  })();
 
   return (
     <section>
@@ -394,7 +403,12 @@ function AnalysisView({ project, onRun, working }: { project: SiteProject; onRun
 
       {analysisTab === 'HDP Discovery' && (
         latestRun?.hdpAnalysis?.rejected ? (
-          <div className="analysis-error-state"><strong>HDP validator rejected this output</strong><p>{latestRun.hdpAnalysis.rejectionReason || 'The generated HDP reasoning did not satisfy the authoritative validation contract.'}</p><small>Request {latestRun.hdpRequestId} · Result remains rejected · RRS was not run from this rejected material.</small></div>
+          <div className="analysis-error-state">
+            <strong>HDP validator rejected this output</strong>
+            <p>{rejectionCategory ? `HDP validator rejection: ${rejectionCategory}.` : 'HDP validator rejection — detailed safe category unavailable.'}</p>
+            {rejectionDiagnostics && <small>Correction attempted: {rejectionDiagnostics.correctionAttempted === true ? 'YES' : rejectionDiagnostics.correctionAttempted === false ? 'NO' : 'UNAVAILABLE'} · Correction result: {rejectionDiagnostics.correctionResult || 'UNAVAILABLE'}</small>}
+            <small>Result remains rejected · RRS was not run from this rejected material · No rejected reasoning is presented as accepted analysis.</small>
+          </div>
         ) : latestRun?.hdpAnalysis ? (
           <SystemOutput title={'HDP Discovery' + (latestRun.hdpAnalysis.resultState ? ' — ' + latestRun.hdpAnalysis.resultState : '')} requestId={latestRun.hdpRequestId} generatedAt={latestRun.hdpAnalysis.generatedAt} items={latestRun.hdpAnalysis.discoveries} />
         ) : <Empty title="HDP Discovery not available" text="HDP remains a distinct output. Run the explicit analysis workflow to populate it." />

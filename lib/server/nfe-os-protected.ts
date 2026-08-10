@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   HdpDiscoveryOutput,
+  HdpRejectionDiagnostics,
   NfeAnalysisOutput,
   NfeProviderMetadata,
   ProtectedServiceCorrelation,
@@ -99,6 +100,7 @@ interface PlatformEnvelope {
   };
   correlation?: PlatformCorrelationEnvelope;
   provenance?: PlatformProvenance;
+  rejectionDiagnostics?: Record<string, unknown>;
 }
 
 export class ProtectedResearchError extends Error {
@@ -430,6 +432,53 @@ export function validatePlatformCorrelation(
   };
 }
 
+type HdpRejectionCode = NonNullable<HdpRejectionDiagnostics['rejectionCode']>;
+type HdpFirstFailureCode = NonNullable<HdpRejectionDiagnostics['firstFailureCode']>;
+type HdpFinishReason = NonNullable<HdpRejectionDiagnostics['firstFinishReason']>;
+type HdpCorrectionIneligibilityReason = NonNullable<HdpRejectionDiagnostics['correctionIneligibilityReason']>;
+type HdpCorrectionResult = NonNullable<HdpRejectionDiagnostics['correctionResult']>;
+
+const HDP_REJECTION_CODES = new Set<HdpRejectionCode>([
+  'CONTENT_INTEGRITY',
+  'HDP_UNSUPPORTED_CAPABILITY',
+  'HDP_SOLUTION_RESTRAINT',
+  'HDP_RESULT_STATE_CONTRACT',
+  'VALIDATION_REJECTED'
+]);
+const HDP_FIRST_FAILURE_CODES = new Set<HdpFirstFailureCode>([
+  'CONTENT_INTEGRITY',
+  'HDP_UNSUPPORTED_CAPABILITY',
+  'HDP_SOLUTION_RESTRAINT',
+  'HDP_RESULT_STATE_CONTRACT',
+  'VALIDATION_REJECTED'
+]);
+const HDP_FINISH_REASONS = new Set<HdpFinishReason>(['STOP', 'MAX_TOKENS', 'SAFETY', 'RECITATION', 'NOT_SUPPLIED', 'OTHER']);
+const HDP_CORRECTION_INELIGIBILITY = new Set<HdpCorrectionIneligibilityReason>(['NONE', 'MAX_TOKENS', 'CONTENT_INTEGRITY']);
+const HDP_CORRECTION_RESULTS = new Set<HdpCorrectionResult>(['REJECTED', 'NOT_ATTEMPTED']);
+
+function allowlistedValue<T extends string>(value: unknown, allowed: Set<T>): T | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toUpperCase() as T;
+  return allowed.has(normalized) ? normalized : undefined;
+}
+
+export function sanitizeHdpRejectionDiagnostics(
+  rejectionCode: unknown,
+  raw: unknown
+): HdpRejectionDiagnostics | undefined {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const safe: HdpRejectionDiagnostics = {
+    rejectionCode: allowlistedValue(rejectionCode, HDP_REJECTION_CODES),
+    firstFailureCode: allowlistedValue(source.firstFailureCode, HDP_FIRST_FAILURE_CODES),
+    firstFinishReason: allowlistedValue(source.firstFinishReason, HDP_FINISH_REASONS),
+    correctionEligible: typeof source.correctionEligible === 'boolean' ? source.correctionEligible : undefined,
+    correctionAttempted: typeof source.correctionAttempted === 'boolean' ? source.correctionAttempted : undefined,
+    correctionIneligibilityReason: allowlistedValue(source.correctionIneligibilityReason, HDP_CORRECTION_INELIGIBILITY),
+    correctionResult: allowlistedValue(source.correctionResult, HDP_CORRECTION_RESULTS)
+  };
+  return Object.values(safe).some((value) => value !== undefined) ? safe : undefined;
+}
+
 function stringsFromSections(value: unknown): string[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
   return Object.entries(value as Record<string, unknown>).flatMap(([key, section]) => {
@@ -477,8 +526,9 @@ function mapHdp(body: PlatformEnvelope, serviceCorrelation: ProtectedServiceCorr
       executionStatus: 'rejected',
       validationStatus: 'rejected',
       rejected: true,
-      rejectionCode: body.error?.code || 'VALIDATOR_REJECTED',
-      rejectionReason: body.error?.message || 'The HDP result was rejected by the authoritative validator.'
+      rejectionCode: sanitizeHdpRejectionDiagnostics(body.error?.code, body.rejectionDiagnostics)?.rejectionCode,
+      rejectionReason: 'The HDP result was rejected by the authoritative validator.',
+      rejectionDiagnostics: sanitizeHdpRejectionDiagnostics(body.error?.code, body.rejectionDiagnostics)
     };
   }
 
