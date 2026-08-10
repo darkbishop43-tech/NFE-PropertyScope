@@ -45,6 +45,7 @@ jobs:
         run: |
           git config user.name "darkbishop43-tech"
           git config user.email "darkbishop43@gmail.com"
+          git checkout HEAD -- .github/workflows/propertyscope-protected-correlation.yml .github/workflows/hdp-rejection-observability-patch.yml
           git add -A
           git commit -m "Retain safe HDP rejection observability"
           git push origin HEAD:scope/first-protected-analysis-adapter
