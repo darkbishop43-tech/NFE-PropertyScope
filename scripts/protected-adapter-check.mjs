@@ -50,7 +50,8 @@ requireText(trustedSource, 'x-vercel-trusted-oidc-idp-token', 'PropertyScope ser
 requireText(trustedSource + route, 'TRUSTED_SOURCE_AUTH_UNAVAILABLE', 'Missing OIDC must fail closed with the approved safe classification.');
 requireText(route, 'requireVercelOidcToken(request.headers)', 'Trusted-source OIDC must be obtained from the server request before protected execution.');
 requireText(route, 'executeProtectedResearch(body, trustedFetch)', 'Protected execution must use the trusted-source server fetch.');
-requireText(oidcTests, 'ONE downstream fetch'.toLowerCase().includes('never') ? 'unused' : 'downstreamCalls, 1', 'Trusted-source deterministic one-fetch proof missing.');
+requireText(oidcTests, 'assert.equal(downstreamCalls, 1);', 'Trusted-source deterministic one-fetch proof missing.');
+requireText(oidcTests, 'assert.equal(downstreamCalls, 0);', 'Trusted-source deterministic fail-before-fetch proof missing.');
 
 for (const legacy of ['/nfe/analyze', '/hdp/run', '/rrs/review']) forbid(adapter + server, legacy, `Historical hypothetical endpoint remained active: ${legacy}`);
 for (const forbidden of ['NFE1.0-sandbox', 'nfe-os-unified-workspace', 'app.js']) forbid(adapter + server + route + trustedSource, forbidden, `Protected implementation coupling found: ${forbidden}`);
