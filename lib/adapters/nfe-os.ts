@@ -1,5 +1,4 @@
 import type {
-  AnalysisFinding,
   Confidence,
   EvidenceItem,
   HdpDiscoveryOutput,
@@ -11,11 +10,11 @@ import type {
 } from '../types';
 
 /**
- * Builder #2 integration boundary.
+ * PropertyScope integration boundary.
  *
- * NFE Site Intelligence owns this interface. The protected NFE-OS Platform does not.
- * This file must never import Platform app.js, DOM state, localStorage keys, browser
- * archive data, or private prompt/lineage internals.
+ * This module owns only PropertyScope request/response mapping. It must never
+ * import PLATFORM source, prompts, validators, DOM state, browser archives, or
+ * protected NFE/HDP/RRS implementation details.
  */
 export interface RealEstateNfePayload {
   domain: 'real-estate';
@@ -29,6 +28,7 @@ export interface RealEstateNfePayload {
     intendedUse?: string;
     apparentCurrentUse?: string;
     submittedAt: string;
+    runCorrelationId?: string;
   };
 }
 
@@ -51,16 +51,24 @@ export interface NfeOsAdapter {
   runRrs(input: RrsRequest): Promise<RrsReviewOutput>;
 }
 
-export function buildRealEstateNfePayload(project: SiteProject, evidence: EvidenceItem[]): RealEstateNfePayload {
+export function buildRealEstateNfePayload(
+  project: SiteProject,
+  evidence: EvidenceItem[],
+  runCorrelationId?: string
+): RealEstateNfePayload {
   const sourceMaterial = [
     `Property: ${project.name}`,
+    `PropertyScope case ID: ${project.id}`,
     `Address/location: ${project.address || project.locationDescription || 'Unknown'}`,
     `Question: ${project.primaryQuestion}`,
+    `Parcel/listing reference: ${project.parcelId || project.listingUrl || 'Not supplied'}`,
     `Intended use: ${project.intendedUse || 'Not specified'}`,
     `Apparent current use: ${project.apparentCurrentUse || 'Unknown'}`,
     '',
-    'Evidence:',
-    ...evidence.map((item) => `- [${item.provenance}] ${item.category}: ${item.title} — ${item.summary || item.value} (confidence: ${item.confidence}; verification required: ${item.verificationRequired ? 'yes' : 'no'})`)
+    'Evidence supplied to PropertyScope:',
+    ...(evidence.length
+      ? evidence.map((item) => `- [${item.provenance}] ${item.category}: ${item.title} — ${item.summary || item.value} (confidence: ${item.confidence}; verification required: ${item.verificationRequired ? 'yes' : 'no'})`)
+      : ['- No structured evidence items are currently attached.'])
   ].join('\n');
 
   return {
@@ -74,27 +82,36 @@ export function buildRealEstateNfePayload(project: SiteProject, evidence: Eviden
       address: project.address || project.locationDescription,
       intendedUse: project.intendedUse,
       apparentCurrentUse: project.apparentCurrentUse,
-      submittedAt: new Date().toISOString()
+      submittedAt: new Date().toISOString(),
+      runCorrelationId
     }
   };
 }
 
 function mockProviderMetadata(): NfeProviderMetadata {
-  return { provider: 'DEVELOPMENT / MOCK', model: 'No external model call', version: 'mock-contract-v0.2' };
+  return {
+    provider: 'DEVELOPMENT / MOCK',
+    model: 'No external model call',
+    version: 'mock-contract-v0.3',
+    service: 'PropertyScope MockNfeOsAdapter'
+  };
 }
 
 export class MockNfeOsAdapter implements NfeOsAdapter {
-  readonly adapterVersion = 'mock-nfe-os-adapter-v0.2';
+  readonly adapterVersion = 'mock-nfe-os-adapter-v0.3';
   readonly isMock = true;
 
   async runNfeAnalysis(input: RealEstateNfePayload): Promise<NfeAnalysisOutput> {
     const confidence: Confidence = input.evidence.length >= 4 ? 'MEDIUM' : 'LOW';
     return {
       requestId: `mock-nfe-${crypto.randomUUID()}`,
+      caseId: input.realEstateCaseId,
       generatedAt: new Date().toISOString(),
       confidence,
       provenance: 'NFE_OS_ANALYSIS',
       providerMetadata: mockProviderMetadata(),
+      executionStatus: 'accepted',
+      validationStatus: 'passed',
       findings: [
         { id: crypto.randomUUID(), category: 'MATTERS_MOST', statement: 'Official zoning, parcel geometry, access, utilities, and environmental constraints should be verified before a preferred development direction is treated as feasible.', importance: 'HIGH', confidence: 'HIGH' },
         { id: crypto.randomUUID(), category: 'HIDDEN_FACTOR', statement: 'The most attractive visible use may not be the highest-value question; the smallest constraint that removes entire classes of options may deserve attention first.', importance: 'HIGH', confidence: 'MEDIUM' },
@@ -110,12 +127,19 @@ export class MockNfeOsAdapter implements NfeOsAdapter {
   }
 
   async runHdp(input: HdpRequest): Promise<HdpDiscoveryOutput> {
+    if (input.nfeAnalysis.caseId && input.nfeAnalysis.caseId !== input.payload.realEstateCaseId) {
+      throw new Error('PropertyScope case correlation failed before HDP. No request was sent.');
+    }
     return {
       requestId: `mock-hdp-${crypto.randomUUID()}`,
+      caseId: input.payload.realEstateCaseId,
       generatedAt: new Date().toISOString(),
       confidence: input.nfeAnalysis.confidence,
       provenance: 'NFE_OS_ANALYSIS',
       providerMetadata: mockProviderMetadata(),
+      executionStatus: 'accepted',
+      validationStatus: 'passed',
+      resultState: 'mock_discovery',
       discoveries: [
         'A highest-value next step may be identifying the first authoritative constraint that can eliminate multiple development scenarios at once.',
         'The hold/no-development option should remain visible until redevelopment economics are supported by evidence rather than assumed from visual opportunity alone.',
@@ -125,11 +149,23 @@ export class MockNfeOsAdapter implements NfeOsAdapter {
   }
 
   async runRrs(input: RrsRequest): Promise<RrsReviewOutput> {
+    if (input.nfeAnalysis.caseId && input.nfeAnalysis.caseId !== input.payload.realEstateCaseId) {
+      throw new Error('PropertyScope case correlation failed before RRS. No request was sent.');
+    }
+    if (input.hdpAnalysis.caseId && input.hdpAnalysis.caseId !== input.payload.realEstateCaseId) {
+      throw new Error('PropertyScope case correlation failed before RRS. No request was sent.');
+    }
+    if (input.hdpAnalysis.rejected || input.hdpAnalysis.validationStatus === 'rejected') {
+      throw new Error('RRS was not run because the HDP result was rejected.');
+    }
     return {
       requestId: `mock-rrs-${crypto.randomUUID()}`,
+      caseId: input.payload.realEstateCaseId,
       generatedAt: new Date().toISOString(),
       provenance: 'NFE_OS_ANALYSIS',
       providerMetadata: mockProviderMetadata(),
+      executionStatus: 'accepted',
+      validationStatus: 'passed',
       verdict: 'Structured preliminary decision support; material verification gaps remain.',
       strengths: [
         'The analysis keeps uncertainty visible instead of converting missing property data into assumed facts.',
@@ -148,66 +184,83 @@ export class MockNfeOsAdapter implements NfeOsAdapter {
 }
 
 export interface NfeOsServiceConfig {
-  baseUrl: string;
-  apiKey?: string;
-  paths?: {
-    nfe?: string;
-    hdp?: string;
-    rrs?: string;
-  };
+  propertyScopeRoute?: string;
 }
 
+type ProtectedClientOperation = 'nfe.analysis' | 'hdp.discovery' | 'rrs.review';
+
 /**
- * Future approved service implementation. Keep this server-side behind Builder #2's
- * own API routes when credentials are required. It has no default Platform URL and
- * performs no automatic retries. Endpoint changes remain localized here.
+ * Browser-safe remote adapter. This class never holds a PLATFORM credential and
+ * never calls PLATFORM directly. It calls PropertyScope's own trusted server
+ * route, which owns the approved server-to-server bearer boundary.
  */
 export class RemoteNfeOsAdapter implements NfeOsAdapter {
-  readonly adapterVersion = 'remote-nfe-os-adapter-v0.1';
+  readonly adapterVersion = 'remote-nfe-os-adapter-protected-v0.1';
   readonly isMock = false;
-  private readonly config: NfeOsServiceConfig;
+  private readonly route: string;
 
-  constructor(config: NfeOsServiceConfig) {
-    if (!config.baseUrl.trim()) throw new Error('An approved NFE-OS service base URL is required.');
-    this.config = config;
+  constructor(config: NfeOsServiceConfig = {}) {
+    this.route = config.propertyScopeRoute || '/api/nfe-os/research';
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
-    const response = await fetch(`${this.config.baseUrl.replace(/\/$/, '')}${path}`, {
+  private async post<T extends { caseId?: string }>(
+    operation: ProtectedClientOperation,
+    body: Record<string, unknown>,
+    expectedCaseId: string,
+    allowRejected = false
+  ): Promise<T> {
+    const response = await fetch(this.route, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(this.config.apiKey ? { authorization: `Bearer ${this.config.apiKey}` } : {})
-      },
-      body: JSON.stringify(body)
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operation, ...body })
     });
 
-    if (!response.ok) {
-      throw new Error(`NFE-OS analysis is temporarily unavailable. Property data has been preserved. Service returned ${response.status}.`);
+    const data = await response.json().catch(() => null) as (T & { error?: { message?: string } }) | null;
+    const rejected = response.status === 422 && allowRejected && data;
+
+    if (!response.ok && !rejected) {
+      throw new Error(
+        data?.error?.message
+          || `NFE-OS analysis is temporarily unavailable. Property data has been preserved. Service returned ${response.status}.`
+      );
     }
 
-    return response.json() as Promise<T>;
+    if (!data) {
+      throw new Error('NFE-OS returned no usable response. Property data has been preserved.');
+    }
+
+    if (data.caseId !== expectedCaseId) {
+      throw new Error('Protected analysis case correlation mismatch. Property data has been preserved and the result was not accepted.');
+    }
+
+    return data;
   }
 
   runNfeAnalysis(input: RealEstateNfePayload): Promise<NfeAnalysisOutput> {
-    return this.post<NfeAnalysisOutput>(this.config.paths?.nfe ?? '/nfe/analyze', input);
+    return this.post<NfeAnalysisOutput>('nfe.analysis', { payload: input }, input.realEstateCaseId);
   }
 
   runHdp(input: HdpRequest): Promise<HdpDiscoveryOutput> {
-    return this.post<HdpDiscoveryOutput>(this.config.paths?.hdp ?? '/hdp/run', input);
+    return this.post<HdpDiscoveryOutput>(
+      'hdp.discovery',
+      { payload: input.payload, nfeAnalysis: input.nfeAnalysis },
+      input.payload.realEstateCaseId,
+      true
+    );
   }
 
   runRrs(input: RrsRequest): Promise<RrsReviewOutput> {
-    return this.post<RrsReviewOutput>(this.config.paths?.rrs ?? '/rrs/review', input);
+    return this.post<RrsReviewOutput>(
+      'rrs.review',
+      { payload: input.payload, nfeAnalysis: input.nfeAnalysis, hdpAnalysis: input.hdpAnalysis },
+      input.payload.realEstateCaseId
+    );
   }
 }
 
-/**
- * Explicit unavailable implementation used when integration is disabled.
- * It deliberately has no default Platform URL and never retries automatically.
- */
+/** Explicit unavailable implementation used when integration is disabled. */
 export class UnavailableNfeOsAdapter implements NfeOsAdapter {
-  readonly adapterVersion = 'unavailable-nfe-os-adapter-v0.1';
+  readonly adapterVersion = 'unavailable-nfe-os-adapter-v0.2';
   readonly isMock = false;
 
   private unavailable(): never {
@@ -219,9 +272,15 @@ export class UnavailableNfeOsAdapter implements NfeOsAdapter {
   async runRrs(): Promise<RrsReviewOutput> { return this.unavailable(); }
 }
 
-export function summarizeIntegrationRun(run: Pick<NfeOsIntegrationRun, 'nfeAnalysis' | 'hdpAnalysis' | 'rrsReview'>): string {
-  const nfeCount = run.nfeAnalysis?.findings.length ?? 0;
-  const hdpCount = run.hdpAnalysis?.discoveries.length ?? 0;
-  const verdict = run.rrsReview?.verdict ?? 'RRS review unavailable.';
-  return `NFE produced ${nfeCount} structured findings. HDP surfaced ${hdpCount} additional discovery signals. RRS conclusion: ${verdict}`;
+export function summarizeIntegrationRun(
+  run: Pick<NfeOsIntegrationRun, 'nfeAnalysis' | 'hdpAnalysis' | 'rrsReview'>
+): string {
+  const nfe = run.nfeAnalysis?.answer
+    ? 'NFE returned a protected visible analysis.'
+    : `NFE produced ${run.nfeAnalysis?.findings.length ?? 0} structured findings.`;
+  const hdp = run.hdpAnalysis?.resultState
+    ? `HDP result state: ${run.hdpAnalysis.resultState}.`
+    : `HDP surfaced ${run.hdpAnalysis?.discoveries.length ?? 0} discovery signals.`;
+  const rrs = run.rrsReview?.verdict ?? 'RRS review unavailable.';
+  return `${nfe} ${hdp} RRS conclusion: ${rrs}`;
 }

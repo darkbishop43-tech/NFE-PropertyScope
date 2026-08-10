@@ -1,0 +1,59 @@
+name: PropertyScope Protected Correlation Proof
+
+on:
+  push:
+    branches:
+      - scope/first-protected-analysis-adapter
+  pull_request:
+    paths:
+      - 'lib/server/nfe-os-protected.ts'
+      - 'lib/types.ts'
+      - 'scripts/protected-adapter-check.mjs'
+      - 'tests/propertyscope-safe-correlation.test.mjs'
+      - 'app/api/nfe-os/research/route.ts'
+      - 'app/sites/[projectId]/page.tsx'
+      - 'app/sites/new/page.tsx'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/propertyscope-protected-correlation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  protected-correlation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: nfe-site-intelligence-builder2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: nfe-site-intelligence-builder2/package-lock.json
+
+      - name: Install dependencies
+        working-directory: nfe-site-intelligence-builder2
+        run: npm ci
+
+      - name: PropertyScope boundary check
+        working-directory: nfe-site-intelligence-builder2
+        run: npm run boundary-check
+
+      - name: Protected adapter boundary check
+        working-directory: nfe-site-intelligence-builder2
+        run: npm run protected-adapter-check
+
+      - name: Deterministic safe-correlation matrix
+        working-directory: nfe-site-intelligence-builder2
+        run: npm run correlation-check
+
+      - name: TypeScript
+        working-directory: nfe-site-intelligence-builder2
+        run: npm run typecheck
+
+      - name: Production build
+        working-directory: nfe-site-intelligence-builder2
+        run: npm run build
