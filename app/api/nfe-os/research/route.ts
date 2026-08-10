@@ -5,6 +5,11 @@ import {
   type PropertyScopeProtectedRequest,
   type ProtectedResearchOperation
 } from '@/lib/server/nfe-os-protected';
+import {
+  createVercelTrustedSourceFetch,
+  requireVercelOidcToken,
+  TrustedSourceAuthError
+} from '@/lib/server/vercel-trusted-source';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,15 +40,24 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const result = await executeProtectedResearch(body);
+    const oidcToken = requireVercelOidcToken(request.headers);
+    const trustedFetch = createVercelTrustedSourceFetch(oidcToken);
+    const result = await executeProtectedResearch(body, trustedFetch);
     return NextResponse.json(result.body, {
       status: result.status,
       headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }
     });
   } catch (error) {
-    const failure = error instanceof ProtectedResearchError
-      ? error
-      : new ProtectedResearchError('Protected analysis failed. Property data has been preserved.', 500, 'PROPERTYSCOPE_ANALYSIS_FAILURE');
+    const failure = error instanceof TrustedSourceAuthError
+      ? new ProtectedResearchError(
+        'Trusted-source authentication is unavailable. Property data has been preserved.',
+        503,
+        error.code,
+        false
+      )
+      : error instanceof ProtectedResearchError
+        ? error
+        : new ProtectedResearchError('Protected analysis failed. Property data has been preserved.', 500, 'PROPERTYSCOPE_ANALYSIS_FAILURE');
 
     return NextResponse.json({
       caseId: body.payload.realEstateCaseId,
